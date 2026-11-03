@@ -1,0 +1,7 @@
+/build/
+/bin/
+/compile_commands.json
+
+# 本地参考代码、备份和代码讲解不随程序发布。
+/reference/
+/docs/Bartmoss代码分区说明.md
