@@ -31,7 +31,7 @@ $writer = $null
 try {
     $serial.Open()
     $writer = [System.IO.StreamWriter]::new($capturePath, $false, [System.Text.UTF8Encoding]::new($false))
-    $writer.WriteLine('tick,R1,R2,enabled,target_deg,left_deg,right_deg,left_online,right_online,left_A,right_A')
+    $writer.WriteLine('tick,R1,R2,enabled,arm_mV,left_deg,right_deg,left_online,right_online,left_A,right_A')
     Write-Output "Reading $Port for $DurationSeconds seconds; log: $capturePath"
     $watch = [System.Diagnostics.Stopwatch]::StartNew()
     $previousButtons = ''
@@ -40,7 +40,7 @@ try {
     while ($watch.Elapsed.TotalSeconds -lt $DurationSeconds) {
         try { $line = $serial.ReadLine().Trim() }
         catch [System.TimeoutException] { continue }
-        if (!$line.StartsWith('BM5,')) { continue }
+        if (!$line.StartsWith('BMV,')) { continue }
         $row = $line.Substring(4)
         $fields = $row.Split(',')
         if ($fields.Count -ne 11) { continue }
@@ -49,7 +49,7 @@ try {
         $sampleCount++
         $buttons = "$($fields[1]),$($fields[2]),$($fields[3])"
         if ($buttons -ne $previousButtons -or $watch.Elapsed.TotalSeconds - $previousPrintTime -ge 1) {
-            Write-Output ("R1={0} R2={1} EN={2} T={3} AL={4} AR={5} ML={6} MR={7} IL={8} IR={9} tick={10}" -f
+            Write-Output ("R1={0} R2={1} EN={2} U_mV={3} AL={4} AR={5} ML={6} MR={7} IL={8} IR={9} tick={10}" -f
                 $fields[1],$fields[2],$fields[3],$fields[4],$fields[5],$fields[6],
                 $fields[7],$fields[8],$fields[9],$fields[10],$fields[0])
             $previousButtons = $buttons
@@ -57,7 +57,7 @@ try {
         }
     }
     Write-Output "Captured $sampleCount samples."
-    if ($sampleCount -eq 0) { Write-Output 'No BM5 telemetry received. Confirm Bartmoss v1.0.0 is running and the data link is connected.' }
+    if ($sampleCount -eq 0) { Write-Output 'No BMV telemetry received. Confirm Bartmoss v1.1.0-voltage is running and the data link is connected.' }
 } finally {
     if ($writer) { $writer.Dispose() }
     if ($serial.IsOpen) { $serial.Close() }

@@ -22,13 +22,7 @@ namespace {
 // 统一遍历具名设备；通过指针地址表写回各设备变量。
 vex::motor** const LeftDrive[4] = {&LF, &LM, &LBD, &LBU};
 vex::motor** const RightDrive[4] = {&RF, &RM, &RBD, &RBU};
-bool arm_active = false;
-manual::arm_pid ArmL_PID(config::ARM_PID);
-manual::arm_pid ArmR_PID(config::ARM_PID);
-manual::arm_target_filter ArmTarget;
-double arm_filtered_target = 0.0;
-double arm_L_voltage = 0.0;
-double arm_R_voltage = 0.0;
+bool arm_moving = false;
 
 bool RegisterPort(int port, bool required, bool (&used)[22]) {
   if (port == 0 && !required) return true;
@@ -126,7 +120,7 @@ bool Initialize() {
   }
   ArmL = CreateMotor(config::ArmL, config::ARM_BRAKE_MODE);
   ArmR = CreateMotor(config::ArmR, config::ARM_BRAKE_MODE);
-  // 软件归零不会寻找机械起点；启动前必须人工放到约定的起始位置。
+  // 编码器归零仅用于观察位移，不参与电压控制，也不要求从机械起点启动。
   if (ArmL) {
     ArmL->setPosition(0, vex::deg);
   }
@@ -143,15 +137,7 @@ manual::Input ReadInput() {
   manual::Input input;
   input.y_axis = ReadAxis(config::YAxis);
   input.angular_axis = ReadAxis(config::AngularAxis);
-  // 默认视为不可用；只有两侧电机都在线且位置差在允许范围内才启用角度控制。
-  input.arm_ready = false;
-  if (ArmL && ArmR && ArmL->installed() && ArmR->installed()) {
-    const double left = ArmL->position(vex::deg);
-    const double right = ArmR->position(vex::deg);
-    input.arm_angle = (left + right) / 2.0 * config::ARM_UP_DIRECTION;
-    const double diff = left - right;
-    input.arm_ready = (diff < 0 ? -diff : diff) <= config::ARM_MAX_DIFF;
-  }
+  input.arm_ready = ArmL && ArmR && ArmL->installed() && ArmR->installed();
   input.arm_up = Pressed(config::ArmUp);
   input.arm_down = Pressed(config::ArmDown);
   input.claw_close = Pressed(config::ClawClose);
@@ -160,55 +146,27 @@ manual::Input ReadInput() {
   return input;
 }
 
-void Apply(const manual::Output& output, double dt) {
+void Apply(const manual::Output& output) {
   for (int i = 0; i < 4; ++i) {
     SetVoltage(*LeftDrive[i], output.L_voltage);
     SetVoltage(*RightDrive[i], output.R_voltage);
   }
-  if (ArmL && ArmR) {
-    const double left = ArmL->position(vex::deg) * config::ARM_UP_DIRECTION;
-    const double right = ArmR->position(vex::deg) * config::ARM_UP_DIRECTION;
-    if (!output.arm_enabled || !ArmL->installed() || !ArmR->installed()) {
-      // 只在退出角度控制时停止一次，避免反复改写保持位置。
-      if (arm_active) {
-        ArmL->stop(config::ARM_BRAKE_MODE);
-        ArmR->stop(config::ARM_BRAKE_MODE);
-      }
-      arm_active = false;
-      ArmL_PID.Reset(left);
-      ArmR_PID.Reset(right);
-      arm_filtered_target = (left + right) / 2.0;
-      ArmTarget.Reset(arm_filtered_target);
-      arm_L_voltage = arm_R_voltage = 0.0;
-    } else {
-      if (!arm_active) {
-        ArmL_PID.Reset(left);
-        ArmR_PID.Reset(right);
-        ArmTarget.Reset((left + right) / 2.0);
-      }
-      const double requested = manual::LimitAngle(output.arm_target_angle,
-          config::ARM_MIN_ANGLE, config::ARM_MAX_ANGLE,
-          config::ARM_UPPER_LIMIT_ENABLED);
-      arm_filtered_target = ArmTarget.Update(requested, dt,
-          config::ARM_MAX_VELOCITY * 6.0, config::ARM_TARGET_FILTER_TIME);
-      arm_L_voltage = ArmL_PID.Update(arm_filtered_target, left, dt);
-      arm_R_voltage = ArmR_PID.Update(arm_filtered_target, right, dt);
-      // 使能期间始终使用电压模式，包括零电压，避免与内置 hold 反复切换。
-      ArmL->spin(vex::fwd, arm_L_voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
-      ArmR->spin(vex::fwd, arm_R_voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
-      arm_active = true;
-    }
+  const bool arm_ready = ArmL && ArmR && ArmL->installed() && ArmR->installed();
+  const int voltage = output.arm_enabled && arm_ready ? output.arm_voltage : 0;
+  if (voltage != 0) {
+    // 两台电机同周期接收电压，左右安装方向由各自的反转配置处理。
+    ArmL->spin(vex::fwd, voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
+    ArmR->spin(vex::fwd, voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
+    arm_moving = true;
+  } else if (arm_moving) {
+    // 仅在停止的瞬间记录内置 hold 位置，避免循环改写保持点。
+    if (ArmL) ArmL->stop(config::ARM_BRAKE_MODE);
+    if (ArmR) ArmR->stop(config::ARM_BRAKE_MODE);
+    arm_moving = false;
   }
   SetVoltage(Claw, output.claw_voltage);
   if (TogglePiston) TogglePiston->set(output.toggle_piston);
 }
-
-void GetArmPIDInfo(double& target, double& L_voltage, double& R_voltage) {
-  target = arm_filtered_target;
-  L_voltage = arm_L_voltage;
-  R_voltage = arm_R_voltage;
-}
-
 void GetDriveMotorCount(int& left_count, int& right_count) {
   left_count = 0;
   right_count = 0;

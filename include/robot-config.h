@@ -24,7 +24,6 @@ extern vex::digital_out* TogglePiston;
 namespace hardware {
 bool Initialize();
 manual::Input ReadInput();
-void Apply(const manual::Output& output, double dt);
-void GetArmPIDInfo(double& target, double& L_voltage, double& R_voltage);
+void Apply(const manual::Output& output);
 void GetDriveMotorCount(int& left_count, int& right_count);
 }  // 硬件接口命名空间
