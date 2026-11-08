@@ -1,10 +1,23 @@
 param(
     [string]$SdkPath = "$env:APPDATA/Code/User/globalStorage/vexrobotics.vexcode/sdk/cpp/V5/V5_20240802_15_00_00",
-    [string]$ToolchainPath = "$env:APPDATA/Code/User/globalStorage/vexrobotics.vexcode/tools/cpp/toolchain_win32"
+    [string]$ToolchainPath = "$env:APPDATA/Code/User/globalStorage/vexrobotics.vexcode/tools/cpp/toolchain_win32",
+    [string]$EnvironmentRoot = '',
+    [switch]$Rebuild
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$deviceSettingsPath = Join-Path $projectRoot '.vex-device.json'
+if (!$EnvironmentRoot -and (Test-Path -LiteralPath $deviceSettingsPath)) {
+    $deviceSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath $deviceSettingsPath | ConvertFrom-Json
+    $EnvironmentRoot = $deviceSettings.environmentRoot
+}
+if ($EnvironmentRoot) {
+    $storageRoot = Join-Path $EnvironmentRoot 'vscode-data/User/globalStorage/vexrobotics.vexcode'
+    $sdkVersion = (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $projectRoot '.vscode/vex_project_settings.json') | ConvertFrom-Json).project.sdkVersion
+    if (!$PSBoundParameters.ContainsKey('SdkPath')) { $SdkPath = Join-Path $storageRoot ('sdk/cpp/V5/' + $sdkVersion) }
+    if (!$PSBoundParameters.ContainsKey('ToolchainPath')) { $ToolchainPath = Join-Path $storageRoot 'tools/cpp/toolchain_win32' }
+}
 $makePath = Join-Path $ToolchainPath 'tools/bin/make.exe'
 $compilerPath = Join-Path $ToolchainPath 'clang/bin/clang.exe'
 $linkerPath = Join-Path $ToolchainPath 'gcc/bin/arm-none-eabi-ld.exe'
@@ -24,5 +37,10 @@ $makeArguments = @(
     ('SIZE="{0}"' -f $sizePath),
     ('OBJCOPY="{0}"' -f $objcopyPath)
 )
-& $makePath @makeArguments
-if ($LASTEXITCODE -ne 0) { throw "VEX build failed (exit $LASTEXITCODE)." }
+if ($Rebuild) { $makeArguments = @('-B') + $makeArguments }
+$previousOS = $env:OS
+try {
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $env:OS = 'Windows_NT' }
+    & $makePath @makeArguments
+    if ($LASTEXITCODE -ne 0) { throw "VEX build failed (exit $LASTEXITCODE)." }
+} finally { $env:OS = $previousOS }

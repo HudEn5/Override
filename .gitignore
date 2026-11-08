@@ -5,3 +5,10 @@
 # 本地参考代码、备份和代码讲解不随程序发布。
 /reference/
 /docs/Bartmoss代码分区说明.md
+
+# Each computer keeps its own role and SDK/toolchain locations.
+/.vex-device.json
+.env
+.env.*
+!*.env.example
+/node_modules/

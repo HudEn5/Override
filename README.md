@@ -1,5 +1,8 @@
 # Bartmoss v1.1.0-voltage · 2026–2027 手动控制
 
+台式机与实验室笔记本通过 GitHub `main` 同步，操作见 [DEVICE_SYNC.md](DEVICE_SYNC.md)。
+另一台电脑的 Codex 可从 [LAPTOP_PROMPT.md](LAPTOP_PROMPT.md) 接手；实测记录写入 [LAB_NOTES.md](LAB_NOTES.md)。
+
 VEX V5 八电机差速底盘手控工程，手臂采用直接电压控制。
 沿用参考工程 Tungsten 的设备命名。当前版本用于实机调试，尚未完成整机验证。
 

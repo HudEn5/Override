@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "VEX: pull GitHub main now",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/sync-github.ps1"],
+      "problemMatcher": []
+    },
+    {
+      "label": "VEX: desktop GitHub auto pull",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/sync-github.ps1", "-Auto"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "runOptions": {"runOn": "folderOpen", "instanceLimit": 1},
+      "presentation": {"reveal": "silent", "panel": "dedicated", "showReuseMessage": false}
+    },
+    {
+      "label": "VEX: build Bartmoss",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build.ps1", "-Rebuild"],
+      "group": {"kind": "build", "isDefault": true},
+      "problemMatcher": []
+    }
+  ]
+}
