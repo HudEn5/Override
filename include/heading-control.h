@@ -33,7 +33,7 @@ class heading_hold {
 
   // 停车只记录角度，不输出转向；重新行驶才修正停车产生的偏差。
   bool Update(bool running, bool ready, double angle, double now,
-              int& left, int& right) {
+              int& left, int& right, double target_limit = 12000.0) {
     info.active = false;
     info.correction = 0.0;
     info.ready = ready && std::isfinite(angle) && std::isfinite(now);
@@ -52,14 +52,15 @@ class heading_hold {
     previous_angle = angle;
     have_previous = true;
     if (!running) return true;
-    if (std::fabs(info.error) > config.max_error) return false;
+    if (std::fabs(info.error) > config.max_error || !std::isfinite(target_limit) || target_limit < 0)
+      return false;
     // 留出电压余量，同时避免修正使任一侧反转；正反行驶用同一转向符号。
     const double smaller = std::min(std::fabs(static_cast<double>(left)),
                                     std::fabs(static_cast<double>(right)));
     const double headroom = 12000.0 - std::max(std::fabs(static_cast<double>(left)),
                                               std::fabs(static_cast<double>(right)));
-    const double limit = std::max(0.0, std::min(config.max_correction,
-        std::min(config.max_fraction * smaller, headroom)));
+    const double limit = std::max(0.0, std::min(target_limit, std::min(config.max_correction,
+        std::min(config.max_fraction * smaller, headroom))));
     info.correction = std::max(-limit, std::min(limit, config.kP * info.error - config.kD * rate));
     const int correction = static_cast<int>(std::lround(info.correction));
     left -= correction;

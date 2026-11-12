@@ -46,6 +46,14 @@ void DriveTelemetry() {
                velocity.right_correction, velocity.active);
         fflush(stdout);
       }
+      if (voltage.visible && voltage.trapezoid) {
+        const drive::trapezoid_info& motion = voltage.motion;
+        printf("DTP,%u,%.1f,%.1f,%.2f,%.2f,%.2f,%.2f,%.2f,%.1f,%d,%d\n", value.sequence,
+               motion.time_ms, motion.elapsed_ms, motion.reference_mm, motion.reference_rpm,
+               motion.distance_mm, motion.target_rpm, motion.remaining_mm, motion.duration_ms,
+               motion.running, motion.phase);
+        fflush(stdout);
+      }
       if (config::ARM_SERIAL_LOG) {
         controller_display_mutex.lock();
         const controller_info info = ControllerInfo;
@@ -94,7 +102,7 @@ void ControllerInfoDisplay() {
                  info.output.L_voltage / 1000.0, info.output.R_voltage / 1000.0);
         if (info.voltage.feedforward) {
           snprintf(lines[0], sizeof(lines[0]), "%s %drpm %s",
-                   info.voltage.speed_control ? "SP" : "FH",
+                   info.voltage.trapezoid ? "TP" : info.voltage.speed_control ? "SP" : "FH",
                    info.voltage.running ? static_cast<int>(info.voltage.target_rpm) :
                    info.voltage.selected_rpm, info.voltage.status);
           char left[8] = "--", right[8] = "--";
@@ -141,8 +149,12 @@ void ControllerInfoDisplay() {
     if (info.voltage.visible) {
       if (info.voltage.feedforward) {
         Brain.Screen.printAt(10, 235, true, "%s %drpm %s                       ",
-                             info.voltage.speed_control ? "SP" : "FH",
+                             info.voltage.trapezoid ? "TP" : info.voltage.speed_control ? "SP" : "FH",
                              info.voltage.selected_rpm, info.voltage.status);
+        if (info.voltage.trapezoid)
+          Brain.Screen.printAt(10, 210, "TP D%+.1f REF%+.1f E%+.1fmm       ",
+                               info.voltage.motion.distance_mm, info.voltage.motion.reference_mm,
+                               info.voltage.motion.remaining_mm);
       } else Brain.Screen.printAt(10, 235, true, "VTEST %.1fV %s                     ",
                            info.voltage.millivolts / 1000.0, info.voltage.status);
     } else {
@@ -216,6 +228,7 @@ int main() {
   VoltageTest.ConfigureReverseFeedforward(config::FF_TEST_LEFT_REVERSE, config::FF_TEST_RIGHT_REVERSE);
   VoltageTest.ConfigureHeading(config::FF_HEADING);
   VoltageTest.ConfigureVelocityPID(config::DRIVE_VELOCITY_PID);
+  VoltageTest.ConfigureTrapezoid(config::TP_TEST);
   drive::telemetry_switch Telemetry;
   vex::thread drive_sampling(drive::SamplingTask);
   vex::thread drive_telemetry(DriveTelemetry);
@@ -267,12 +280,17 @@ int main() {
     velocity.time_ms = speed.time_ms;
     velocity.left_rpm = speed.left.rpm;
     velocity.right_rpm = speed.right.rpm;
+    drive::position_feedback position;
+    if (VoltageTest.Info().trapezoid)
+      position.valid = hardware::ReadDrivePosition(position.left_deg, position.right_deg);
     const bool voltage_owns_drive = VoltageTest.Update(input, output,
         enabled && !competition_connected && !test_owns_drive, motors_online, current_time,
-        stopped, inertial_ready, heading, velocity);
-    hardware::Apply(output, !test_owns_drive, voltage_owns_drive);
+        stopped, inertial_ready, heading, velocity, position);
+    // 禁用或接入场控后即使测试已让出控制，也保持明确的刹车；摇杆接管会清除测试视图。
+    hardware::Apply(output, !test_owns_drive, voltage_owns_drive || VoltageTest.Info().visible);
     const int mode = test_owns_drive ? 3 : (VoltageTest.Info().visible ?
-        (VoltageTest.Info().speed_control ? 5 : (VoltageTest.Info().feedforward ? 4 : 1)) : 0);
+        (VoltageTest.Info().trapezoid ? 6 : VoltageTest.Info().speed_control ? 5 :
+         (VoltageTest.Info().feedforward ? 4 : 1)) : 0);
     drive::PublishCommand(output.L_voltage, output.R_voltage, enabled, !test_owns_drive,
                           mode, VoltageTest.Info().target_rpm);
     // 控制循环仅发布快照，不执行屏幕打印和串口等待。

@@ -4,6 +4,7 @@
 #include "drive-control.h"
 #include "heading-control.h"
 #include "velocity-control.h"
+#include "trapezoid-motion.h"
 
 // 智能端口填写主控上的编号 1～21；三线端口填写 'A'～'H'。
 namespace config {
@@ -70,12 +71,20 @@ const int UPDATE_TIME = 10;  // 缩短输入采样和输出更新的等待时间
 constexpr int TELEMETRY_INTERVAL_MS = 200;  // 回传最多 5 Hz；内部速度采样仍为约 50 Hz。
 constexpr bool ARM_SERIAL_LOG = false;  // 默认关闭 BMV 手臂日志，避免挤占无线带宽。
 constexpr int DRIVE_TEST_VOLTAGES[3] = {2000, 3000, 4000};  // 固定电压测试档位，单位 mV。
-constexpr int DRIVE_TEST_TIMEOUT_MS = 3000;  // 每次按住最多运行 3 秒，松开后才能重试。
+constexpr int DRIVE_TEST_TIMEOUT_MS = 3000;  // VTEST/FH/SP 最多 3 秒；TP 按规划时长加余量。
 constexpr int FF_TEST_TARGETS[3] = {100, 150, 200};  // 电机输出轴 rpm。
 constexpr int TEST_MODE_HOLD_MS = 1000;  // 停车长按下方向键切换测试模式。
 // 前馈测试同时保持航向；停车不原地纠偏，重新起步仍沿用本轮最初方向。
 const drive::heading_config FF_HEADING = drive::heading_config();
 const drive::velocity_pid_config DRIVE_VELOCITY_PID = drive::velocity_pid_config();
+inline drive::trapezoid_config TrapezoidTest() {
+  drive::trapezoid_config result;
+  result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
+  result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
+  result.distance_mm = SQUARE_SIDE_MM;  // TP 每段前进/后退 500 mm。
+  return result;
+}
+const drive::trapezoid_config TP_TEST = TrapezoidTest();
 // 2026-11-12 根据当前硬件三轮 FF 验证更新：18 段、158 条运行后段样本。
 // 左右与前进/后退分别拟合，保留四台电机平均值，没有剔除 LM。
 // 已完成当前场地 100/150/200 rpm 的 SP 基础测试；跨场地一致性待验证。

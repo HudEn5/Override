@@ -21,7 +21,7 @@ VEX V5 八电机差速底盘手控工程，手臂采用直接电压控制。
 | B 按下沿 | 启动边长 500 mm 的正方形测试 |
 | Y 按下沿 | 开始 / 停止数据回传，启动时默认关闭 |
 | 短按方向键上 / 下 | 测试升档 / 降档，下键松手时降档 |
-| 停车长按下方向键 1 秒 | 依次切换 VTEST / FH / SP，不使用组合键 |
+| 停车长按下方向键 1 秒 | 依次切换 VTEST / FH / SP / TP，不使用组合键 |
 | 按住方向键右 / 左 | 当前测试模式前进 / 后退，松开停止 |
 
 底盘按“左 = 前后 + 转向，右 = 前后 − 转向”混控。
@@ -80,8 +80,8 @@ A 键转向仍可使用。
 车停稳、左右运行键松开后，长按下方向键约 1 秒，遥控器由 VTEST 切换为 FH（前馈加航向保持）。
 短按上 / 下选择 100、150、200 rpm，上键按下升档、下键松手降档。
 按住右键前进，按住左键后退；松开刹车，每次仍最多运行 3 秒。
-每次停车长按下键 1 秒，依次切换 VTEST → FH → SP → VTEST；每次切换后先松开下键。
-VTEST 独立记忆电压档位，FH/SP 共用转速档位，启动默认固定电压。
+每次停车长按下键 1 秒，依次切换 VTEST → FH → SP → TP → VTEST；每次切换后先松开下键。
+VTEST 独立记忆电压档位，FH/SP/TP 共用转速档位，启动默认固定电压。
 上下同时按下不会切换模式；运行、车辆尚未停稳、校准、掉线或禁用期间不允许切换。
 停车判据为八台测速有效且左右平均原始转速绝对值都小于 5 rpm；长按期间出现移动会取消手势。
 
@@ -136,6 +136,36 @@ PID 仅在新速度样本到达时更新，使用样本实际时间差，重复�
 首次实车验证先用 100 rpm，采集目标、实际速度和 PID 修正电压；再判断是否增加档位或调整增益。
 2026-11-12 采集的 `drive-websocket-1794483839438` 中，用户报告 200 rpm 后退撞到障碍，
 整段 -200 rpm 已标记为不用于调参，原始数据保留。此轮没有重新拟合前馈或继续调整换向航向参数。
+
+## 梯形速度规划测试（TP）
+
+合入同事 `feature/trapezoid-speed-tests`（`af8e5e7`）的 `TrapezoidProfile` 和 `limitVelocity` 数学实现。
+以 main 的设备、按键、采样和控制参数为准，程序名 Bartmoss；Y 仍仅开关回传，普通手控与 A/B 动作不变。
+同事分支的 Y 键路线、20 Hz BMD 输出和 SDK 转速执行器未接入本程序；其完整实现仍保留在原分支。
+
+启动后保持静止完成惯导校准，停车长按下键依次进入 TP，每次切换后松开下键。
+短按上/下选择最高 100、150、200 rpm；按住右键走 +500 mm，按住左键走 -500 mm。
+完成后自动刹车，继续按住不会重复启动，必须松开后再按；途中松手立即取消并刹车。
+运行中换向要求先松手，摇杆/A/B/掉线/禁用的接管和互锁沿用现有测试设置。
+
+距离采用已有 69.85 mm 轮径和 36/30 外部传动比，从每次起点的相对编码器位移计算，不清零电机编码器。
+规划统一用 mm、mm/s、秒，随后换成电机输出轴 rpm；位置纠偏用左右平均位移，航向仍由 4 号口惯导反馈。
+规划参考加减速度均为 120 rpm/s；距离 500 mm、位置比例增益 0.25 rpm/mm、纠偏上限 20 rpm、
+位置窗口 5 mm、左右滤波转速窗口各 5 rpm、停稳时间 250 ms。
+参数在 `config::TP_TEST` / `drive::trapezoid_config`；最高转速是上限，短距离会自动变成三角形。
+当前 500 mm、120 rpm/s 配置下，150 和 200 rpm 档的参考峰值都约 140 rpm，不会强行加速到选定上限。
+
+控制顺序为：梯形位置/速度参考 → 平均位置误差修正与速度变化率限制 → 惯导航向差速 →
+共用电压前馈与速度 PID。SP 与 TP 共用 `include/drive-velocity.h`，FF/PID 数值未重新调整，kA 仍为 0。
+TP 在低速时还把航向差速对应的目标偏移限制在中心目标的 25% 内，避免静摩擦电压使目标跨过零点。
+规划结束后还需实际位移和速度满足窗口并持续稳定，不能仅按规划时间宣布完成。
+进入终点位置窗口后直接 brake 等待停稳；取消和故障同样立即制动。
+超时为规划时长 +3 秒，不继承 VTEST/FH/SP 的固定 3 秒运行上限。
+所有输出仍由主循环统一发送，显示、回传只读取由 mutex 保护的快照。
+
+TP 仅用于无场控的手柄调试，尚未接管比赛自动时段；本阶段只集成直线前进/后退，不新增弧线或转弯路线。
+数学规划、合成负载跟随、完成判据、取消和故障检查通过；尚未执行合并版的实车下载或验证。
+现有前馈只完成 100～200 rpm 的基础实测，TP 经过的低速区与终点表现仍需测试；首次用 100 rpm 档。
 
 ## 手臂纯电压模式
 
@@ -234,7 +264,7 @@ sequence 是内部采样序号，因此正常回传时通常相隔约 10；dt_ms
 滤波与加速度使用实际采样时间，首样本、掉线恢复及超过 200 ms 的间隔后，加速度标为无效。
 
 新版输出使用 DS2 格式（29 列），在原 DSV 27 列之后追加 mode、target_rpm。
-mode：0 手控，1 固定电压测试，2 旧版纯前馈，3 自动动作，4 FH，5 SP。
+mode：0 手控，1 固定电压测试，2 旧版纯前馈，3 自动动作，4 FH，5 SP，6 TP。
 接收脚本兼容旧 DSV，为旧数据补 mode=-1（未知）、target_rpm=0，不推测旧版的转速目标。
 主控无法直接连接电脑时，可使用遥控器和 VS Code 转发：
 
@@ -253,16 +283,22 @@ node scripts/monitor-drive-websocket.mjs 60
 完整采样保存为 `build/drive-websocket-*.csv`，原始输出同时保存为同名 `.log`。
 诊断版还会输出 DLM 行，同序号、同时间戳的 LM/LF 角度和电流保存在同名 `-motors.csv`。
 列为 sequence,time_ms,LM_deg,LM_current_A,LF_deg,LF_current_A,diagnostic_mask。
-FH/SP 模式另输出 DHD 行，接收脚本保存到同名 `-heading.csv`：
+FH/SP/TP 模式另输出 DHD 行，接收脚本保存到同名 `-heading.csv`：
 sequence,heading_time_ms,heading_deg,target_deg,error_deg,correction_mV,locked,ready,active。
 航向数据由主控制循环读取并通过互斥锁发布快照，串口输出仍集中在原来的单一线程。
 sequence 关联本次发送的速度行；heading_time_ms 是航向快照的主循环时间，可能与速度采样时间不同，
 两个线程的计时器也有启动偏移，不能假设两者严格同时。停车时 active=0，但仍回传误差，
 便于比较停车前后的偏转；5 Hz 回传不能还原短于采样间隔的瞬时过程。
-SP 模式还输出 DVL 行，保存到同名 `-velocity.csv`：
+SP/TP 模式还输出 DVL 行，保存到同名 `-velocity.csv`：
 sequence,velocity_time_ms,left_target_rpm,right_target_rpm,left_error_rpm,right_error_rpm,left_correction_mV,right_correction_mV,active。
 sequence 同样关联本次发送的速度行；velocity_time_ms 是最近一次 PID 使用的速度样本时刻，
 不保证等于本次发送的速度行时刻。左右 error=对应目标-对应实测速度；active=0 时闭环补偿未生效。
+TP 另输出 DTP 行，保存到同名 `-profile.csv`：
+sequence,motion_time_ms,elapsed_ms,reference_mm,reference_rpm,distance_mm,target_rpm,remaining_mm,duration_ms,running,phase。
+motion_time_ms 为主循环快照时间，sequence 关联本次发送的速度行；同样不假设物理上严格同时。
+phase：0 空闲、1 加速、2 匀速、3 减速、4 等待停稳、5 完成、6 取消、7 故障。
+reference 为纯规划参考；target_rpm 含位置纠偏和变化率限制，DVL 两侧目标还包含航向修正。
+所有记录继续共用 Y 开关、200 ms 回传间隔和同一串口线程，不新增持续打印线程。
 diagnostic_mask 第 0 位表示 LM 有效，第 1 位表示 LF 有效，3 表示两台均有效。
 角度为电机减速箱输出轴累计度数，电流单位 A。诊断与 Y 开关、5 Hz 回传及快照互斥锁共用。
 可离线用相邻有效记录的角度差 / (6 × 实际时间差秒数) 计算区间平均 rpm，再和同一时间区间的 SDK 转速比较。
@@ -324,6 +360,10 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/heading-control-
 ./build/heading-control-test
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/velocity-control-test.cpp -o build/velocity-control-test
 ./build/velocity-control-test
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/trapezoid-profile-test.cpp -o build/trapezoid-profile-test
+./build/trapezoid-profile-test
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/trapezoid-motion-test.cpp -o build/trapezoid-motion-test
+./build/trapezoid-motion-test
 node tests/drive-websocket-test.mjs
 g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic -pthread -I tests/sampling-mocks -I include src/drive-sampling.cpp tests/drive-sampling-test.cpp -o build/drive-sampling-test
 ./build/drive-sampling-test
@@ -342,6 +382,9 @@ g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic -pthread -I tests/sampling-mo
 - include/voltage-test.h：电压 / 前馈测试、长按切换、档位、限时停止和输入接管。
 - include/heading-control.h：前馈测试的跨换向航向参考、转向修正及限幅。
 - include/velocity-control.h：独立速度 PID、积分防饱和和速度反馈接口。
+- include/drive-velocity.h：SP/TP 共用的前馈、电压速度环和反馈时效检查。
+- include/trapezoid-profile.h：来自同事分支的纯梯形数学规划和速度变化率限制。
+- include/trapezoid-motion.h：直线参考跟随、平均位置纠偏、终点停稳与超时。
 - scripts/、vex/、makefile、.vscode/：构建、只读监测及工程配置。
 
 切换前的完整 PID 工程和校验清单保存在本地 build/backups/ 中。

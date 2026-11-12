@@ -4,6 +4,8 @@
 #include "drive-control.h"
 #include "heading-control.h"
 #include "velocity-control.h"
+#include "drive-velocity.h"
+#include "trapezoid-motion.h"
 #include <cmath>
 
 struct voltage_test_info {
@@ -17,6 +19,8 @@ struct voltage_test_info {
   drive::heading_info heading;
   bool speed_control = false;
   drive::velocity_loop_info velocity;
+  bool trapezoid = false;
+  drive::trapezoid_info motion;
   const char* status = "READY";
 };
 
@@ -36,21 +40,19 @@ class voltage_test {
   }
 
   void ConfigureVelocityPID(const drive::velocity_pid_config& config) {
-    velocity_config = config;
-    left_pid.Configure(config);
-    right_pid.Configure(config);
+    velocity.ConfigurePID(config);
     velocity_configured = true;
+  }
+
+  void ConfigureTrapezoid(const drive::trapezoid_config& config) {
+    Motion.Configure(config);
+    trapezoid_configured = true;
   }
 
   void ConfigureFeedforward(const int (&rpm)[3], const drive::feedforward_config& left,
                             const drive::feedforward_config& right, double hold_ms) {
     for (int i = 0; i < 3; ++i) targets[i] = rpm[i];
-    left_ff = drive::motor_feedforward(left);
-    right_ff = drive::motor_feedforward(right);
-    left_reverse_ff = left_ff;
-    right_reverse_ff = right_ff;
-    left_kV = left_reverse_kV = left.kV;
-    right_kV = right_reverse_kV = right.kV;
+    velocity.ConfigureForward(left, right);
     mode_hold_ms = hold_ms;
     info.selected_rpm = targets[ff_level];
   }
@@ -58,24 +60,16 @@ class voltage_test {
   // 不设置时后退沿用前进模型；有重复实测数据时可独立补偿正反向差异。
   void ConfigureReverseFeedforward(const drive::feedforward_config& left,
                                    const drive::feedforward_config& right) {
-    left_reverse_ff = drive::motor_feedforward(left);
-    right_reverse_ff = drive::motor_feedforward(right);
-    left_reverse_kV = left.kV;
-    right_reverse_kV = right.kV;
+    velocity.ConfigureReverse(left, right);
   }
 
   bool Update(const manual::Input& input, manual::Output& output, bool allowed,
               bool motors_online, double now_ms, bool stopped = true,
               bool inertial_ready = false, double angle = 0.0,
-              const drive::velocity_feedback& speed = drive::velocity_feedback()) {
-    const bool speed_valid = speed.valid && std::isfinite(speed.time_ms) &&
-        std::isfinite(speed.left_rpm) && std::isfinite(speed.right_rpm);
-    if (speed_valid && (!have_speed || speed.sequence != speed_sequence)) {
-      speed_sequence = speed.sequence;
-      speed_received_at = now_ms;
-      have_speed = true;
-    }
-    if (!speed_valid) have_speed = false;
+              const drive::velocity_feedback& speed = drive::velocity_feedback(),
+              const drive::position_feedback& position = drive::position_feedback()) {
+    velocity.Observe(speed, now_ms);
+    bool beginning = false;
     const bool up = previous_allowed && input.voltage_up && !previous_up;
     const bool down = previous_allowed && input.voltage_down && !previous_down;
     const bool down_released = previous_down && !input.voltage_down;
@@ -93,6 +87,7 @@ class voltage_test {
       down_pending = false;
       ResetHeading();
       ResetSpeed();
+      CancelMotion();
       return false;
     }
     if (!allowed || !motors_online || !std::isfinite(now_ms)) {
@@ -101,6 +96,7 @@ class voltage_test {
       down_pending = false;
       ResetHeading();
       ResetSpeed();
+      CancelMotion();
       info.status = !allowed ? "DISABLED" : (!motors_online ? "MOTOR OFF" : "CLOCK ERR");
       if (!allowed || !info.visible) return false;
       output.L_voltage = output.R_voltage = 0;
@@ -126,12 +122,16 @@ class voltage_test {
         else if (!down_consumed && now_ms - down_started_at >= mode_hold_ms) {
           if (info.feedforward && velocity_configured && !info.speed_control)
             info.speed_control = true;
+          else if (info.speed_control && trapezoid_configured && !info.trapezoid)
+            info.trapezoid = true;
           else {
             info.feedforward = !info.feedforward;
             info.speed_control = false;
+            info.trapezoid = false;
           }
           ResetHeading();  // 主动退出/重进前馈模式时才建立新一轮参考。
           ResetSpeed();
+          CancelMotion();
           down_consumed = true;
         }
       }
@@ -162,8 +162,9 @@ class voltage_test {
           direction = requested_direction;
           started_at = now_ms;
           info.running = true;
+          beginning = true;
         }
-        if (now_ms < started_at || now_ms - started_at >= timeout) {
+        if (!info.trapezoid && (now_ms < started_at || now_ms - started_at >= timeout)) {
           info.running = false;
           need_release = true;
           info.status = "TIMEOUT";
@@ -175,25 +176,41 @@ class voltage_test {
 
     if (!info.visible) return false;
     output.L_voltage = output.R_voltage = 0;
+    double target = direction * info.selected_rpm;
+    if (info.trapezoid && info.running) {
+      bool valid = velocity.Fresh(now_ms);
+      if (valid && beginning)
+        valid = Motion.Start(direction, info.selected_rpm, position, speed, now_ms, stopped);
+      if (valid) valid = Motion.Update(position, speed, now_ms);
+      info.motion = Motion.Info();
+      if (!valid || !info.motion.running) {
+        info.running = false;
+        need_release = true;
+        info.status = valid ? info.motion.status :
+            (velocity.Fresh(now_ms) ? info.motion.status : "SPEED ERR");
+      } else {
+        target = info.motion.target_rpm;
+        info.status = info.motion.status;
+      }
+    }
     if (info.running && info.feedforward) {
-      const double target = direction * info.selected_rpm;
-      const drive::feedforward_output left = (direction > 0 ? left_ff : left_reverse_ff).Calculate(target, 0.0);
-      const drive::feedforward_output right = (direction > 0 ? right_ff : right_reverse_ff).Calculate(target, 0.0);
-      if (!left.valid || !right.valid || left.saturated || right.saturated) {
+      if (!velocity.Feedforward(target, target, output.L_voltage, output.R_voltage)) {
         info.running = false;
         need_release = true;
         info.status = "FF ERROR";
       } else {
-        output.L_voltage = static_cast<int>(std::lround(left.millivolts));
-        output.R_voltage = static_cast<int>(std::lround(right.millivolts));
         info.target_rpm = target;
       }
     } else if (info.running) {
       output.L_voltage = output.R_voltage = direction * info.millivolts;
     }
     if (info.feedforward && info.heading_enabled) {
+      // TP 低速时静摩擦电压占比大，额外限制差速目标，避免某侧目标跨过零点。
+      const double target_limit = info.trapezoid && info.running ?
+          0.25 * std::fabs(info.target_rpm) * std::min(velocity.Slope(true, info.target_rpm),
+                                                    velocity.Slope(false, info.target_rpm)) : 12000.0;
       const bool valid = heading.Update(info.running, inertial_ready, angle, now_ms,
-                                        output.L_voltage, output.R_voltage);
+                                        output.L_voltage, output.R_voltage, target_limit);
       info.heading = heading.Info();
       if (!valid) {
         info.running = false;
@@ -204,7 +221,7 @@ class voltage_test {
       }
     }
     if (info.speed_control && info.running) {
-      if (!ApplySpeed(speed, speed_valid, now_ms, output)) {
+      if (!ApplySpeed(speed, now_ms, output)) {
         info.running = false;
         need_release = true;
         output.L_voltage = output.R_voltage = 0;
@@ -214,62 +231,36 @@ class voltage_test {
         ResetSpeed();
       }
     } else ResetSpeed();
+    if (!info.running) CancelMotion();
     return true;
   }
 
  private:
   void ResetHeading() { heading.Reset(); info.heading = heading.Info(); }
   void ResetSpeed() {
-    left_pid.Reset(); right_pid.Reset(); info.velocity = drive::velocity_loop_info();
+    velocity.Reset(); info.velocity = velocity.Info();
   }
-  bool ApplySpeed(const drive::velocity_feedback& speed, bool valid, double now,
+  void CancelMotion() { Motion.Cancel(); info.motion = Motion.Info(); }
+  bool ApplySpeed(const drive::velocity_feedback& speed, double now,
                   manual::Output& output) {
-    if (!valid || !have_speed || !std::isfinite(velocity_config.stale_ms) ||
-        velocity_config.stale_ms <= 0 || now < speed_received_at ||
-        now - speed_received_at > velocity_config.stale_ms) return false;
-    drive::velocity_loop_info& loop = info.velocity;
-    if (!loop.active || speed.sequence != applied_speed_sequence) {
-      const double dt = loop.active ? (speed.time_ms - loop.time_ms) / 1000.0 : 0.0;
-      // 航向外环产生差速目标，速度内环跟踪它，避免两个环互相抵消。
-      const double yaw = info.heading.active ? info.heading.correction : 0.0;
-      loop.left_target = info.target_rpm - yaw / (direction > 0 ? left_kV : left_reverse_kV);
-      loop.right_target = info.target_rpm + yaw / (direction > 0 ? right_kV : right_reverse_kV);
-      loop.left_error = loop.left_target - speed.left_rpm;
-      loop.right_error = loop.right_target - speed.right_rpm;
-      const double left_base = std::fabs(static_cast<double>(output.L_voltage));
-      const double right_base = std::fabs(static_cast<double>(output.R_voltage));
-      if (!left_pid.Update(loop.left_target, speed.left_rpm, dt,
-              std::min(left_base * 0.5, 12000.0 - left_base), loop.left_correction) ||
-          !right_pid.Update(loop.right_target, speed.right_rpm, dt,
-              std::min(right_base * 0.5, 12000.0 - right_base), loop.right_correction)) return false;
-      loop.time_ms = speed.time_ms;
-      loop.active = true;
-      applied_speed_sequence = speed.sequence;
-    }
-    output.L_voltage = static_cast<int>(std::lround(std::max(-12000.0,
-        std::min(12000.0, output.L_voltage + loop.left_correction))));
-    output.R_voltage = static_cast<int>(std::lround(std::max(-12000.0,
-        std::min(12000.0, output.R_voltage + loop.right_correction))));
-    return true;
+    // 外环的差速电压按当前运动方向的 kV 换算成两侧目标，内环跟踪它。
+    const double yaw = info.heading.active ? info.heading.correction : 0;
+    const double left_target = info.target_rpm - yaw / velocity.Slope(true, info.target_rpm);
+    const double right_target = info.target_rpm + yaw / velocity.Slope(false, info.target_rpm);
+    const bool valid = velocity.ApplyPID(left_target, right_target, speed, now,
+                                        output.L_voltage, output.R_voltage);
+    info.velocity = velocity.Info();
+    return valid;
   }
-  drive::velocity_pid left_pid, right_pid;
-  drive::velocity_pid_config velocity_config;
+  drive::velocity_control velocity;
+  drive::trapezoid_motion Motion;
+  bool trapezoid_configured = false;
   bool velocity_configured = false;
-  bool have_speed = false;
-  unsigned int speed_sequence = 0;
-  unsigned int applied_speed_sequence = 0;
-  double speed_received_at = 0.0;
-  double left_kV = 1.0, right_kV = 1.0;
-  double left_reverse_kV = 1.0, right_reverse_kV = 1.0;
   drive::heading_hold heading;
   int levels[3];
   int level = 0;
   int targets[3] = {100, 150, 200};
   int ff_level = 0;
-  drive::motor_feedforward left_ff{drive::feedforward_config()};
-  drive::motor_feedforward right_ff{drive::feedforward_config()};
-  drive::motor_feedforward left_reverse_ff{drive::feedforward_config()};
-  drive::motor_feedforward right_reverse_ff{drive::feedforward_config()};
   double mode_hold_ms = 1000.0;
   double down_started_at = 0.0;
   bool down_pending = false;

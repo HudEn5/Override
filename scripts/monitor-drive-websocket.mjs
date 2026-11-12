@@ -7,6 +7,7 @@ const BASE = 'ws://127.0.0.1:7071/vexrobotics.vexcode';
 export const MOTOR_HEADER = 'sequence,time_ms,LM_deg,LM_current_A,LF_deg,LF_current_A,diagnostic_mask';
 export const HEADING_HEADER = 'sequence,heading_time_ms,heading_deg,target_deg,error_deg,correction_mV,locked,ready,active';
 export const VELOCITY_HEADER = 'sequence,velocity_time_ms,left_target_rpm,right_target_rpm,left_error_rpm,right_error_rpm,left_correction_mV,right_correction_mV,active';
+export const PROFILE_HEADER = 'sequence,motion_time_ms,elapsed_ms,reference_mm,reference_rpm,distance_mm,target_rpm,remaining_mm,duration_ms,running,phase';
 
 // 串口数据可跨越多个 WebSocket 消息，必须拼成完整行后再解析。
 export class DriveLines {
@@ -16,9 +17,11 @@ export class DriveLines {
   diagnostics = 0;
   headings = 0;
   velocities = 0;
-  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}) {
+  profiles = 0;
+  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}, onProfile = () => {}) {
     this.onSample = onSample; this.onDiagnostic = onDiagnostic; this.onHeading = onHeading;
     this.onVelocity = onVelocity;
+    this.onProfile = onProfile;
   }
   push(text) {
     this.pending += text;
@@ -31,15 +34,17 @@ export class DriveLines {
       const diagnostic = record.startsWith('DLM,');
       const heading = record.startsWith('DHD,');
       const velocity = record.startsWith('DVL,');
-      if (!legacy && !diagnostic && !heading && !velocity && !record.startsWith('DS2,')) { this.other++; continue; }
+      const profile = record.startsWith('DTP,');
+      if (!legacy && !diagnostic && !heading && !velocity && !profile && !record.startsWith('DS2,')) { this.other++; continue; }
       const fields = record.slice(4).split(',');
-      if (fields.length !== (heading || velocity ? 9 : (diagnostic ? 7 : (legacy ? 27 : 29))) || fields.some(x => !x.trim() || !Number.isFinite(Number(x)))) {
+      if (fields.length !== (profile ? 11 : (heading || velocity ? 9 : (diagnostic ? 7 : (legacy ? 27 : 29)))) || fields.some(x => !x.trim() || !Number.isFinite(Number(x)))) {
         this.malformed++;
         continue;
       }
       if (diagnostic) { this.diagnostics++; this.onDiagnostic(fields); continue; }
       if (heading) { this.headings++; this.onHeading(fields); continue; }
       if (velocity) { this.velocities++; this.onVelocity(fields); continue; }
+      if (profile) { this.profiles++; this.onProfile(fields); continue; }
       // 旧日志没有模式和目标转速，标为未知模式 -1，不能反推出目标转速。
       this.onSample(legacy ? [...fields, '-1', '0'] : fields);
     }
@@ -75,7 +80,7 @@ export async function capture(seconds) {
   const stem = path.join(directory, `drive-websocket-${Date.now()}`);
   // wx 防止覆盖已有的实测数据。原始日志保留不完整行，便于定位传输问题。
   const csv = fs.openSync(`${stem}.csv`, 'wx');
-  let raw, motors, headings, velocities;
+  let raw, motors, headings, velocities, profiles;
   try {
     raw = fs.openSync(`${stem}.log`, 'wx');
     motors = fs.openSync(`${stem}-motors.csv`, 'wx');
@@ -84,8 +89,10 @@ export async function capture(seconds) {
     fs.writeSync(headings, `${HEADING_HEADER}\n`);
     velocities = fs.openSync(`${stem}-velocity.csv`, 'wx');
     fs.writeSync(velocities, `${VELOCITY_HEADER}\n`);
+    profiles = fs.openSync(`${stem}-profile.csv`, 'wx');
+    fs.writeSync(profiles, `${PROFILE_HEADER}\n`);
   } catch (error) {
-    for (const fd of [csv, raw, motors, headings, velocities]) if (fd !== undefined) fs.closeSync(fd);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles]) if (fd !== undefined) fs.closeSync(fd);
     throw error;
   }
   let samples = 0, bytes = 0, latest, connected = false;
@@ -94,13 +101,15 @@ export async function capture(seconds) {
     samples++; latest = fields;
   }, fields => fs.writeSync(motors, `${fields.join(',')}\n`),
   fields => fs.writeSync(headings, `${fields.join(',')}\n`),
-  fields => fs.writeSync(velocities, `${fields.join(',')}\n`));
+  fields => fs.writeSync(velocities, `${fields.join(',')}\n`),
+  fields => fs.writeSync(profiles, `${fields.join(',')}\n`));
   fs.writeSync(csv, `${HEADER}\n`);
   console.log(`只读采集 ${seconds}s，设备 ${device.platform} ${device.device}，VS Code ID=${device.instanceId}`);
   console.log(`CSV: ${stem}.csv`);
   console.log(`LM/LF 角度和电流: ${stem}-motors.csv`);
   console.log(`航向和修正电压: ${stem}-heading.csv`);
   console.log(`速度闭环目标、误差和补偿: ${stem}-velocity.csv`);
+  console.log(`梯形参考、距离和阶段: ${stem}-profile.csv`);
   try {
     await new Promise((resolve, reject) => {
       const ws = new WebSocket(`${BASE}/device?id=${encodeURIComponent(device.instanceId)}`);
@@ -119,8 +128,8 @@ export async function capture(seconds) {
       const stop = () => finish();
       const connectTimer = setTimeout(() => finish(new Error('连接设备数据通道超时')), 5000);
       const status = setInterval(() => {
-        const values = latest ? `L=${latest[8]} R=${latest[9]} rpm，在线掩码=${latest[3]}/${latest[4]}，模式=${['手控','固定电压','前馈','自动','前馈+航向','前馈+航向+速度PID'][latest[27]] ?? '旧版'} T=${latest[28]}rpm` : '尚无速度采样；请确认遥控器 LOG:ON（Y 切换）';
-        console.log(`${values}；样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，接收=${bytes} 字节`);
+        const values = latest ? `L=${latest[8]} R=${latest[9]} rpm，在线掩码=${latest[3]}/${latest[4]}，模式=${['手控','固定电压','前馈','自动','前馈+航向','前馈+航向+速度PID','TP梯形规划'][latest[27]] ?? '旧版'} T=${latest[28]}rpm` : '尚无速度采样；请确认遥控器 LOG:ON（Y 切换）';
+        console.log(`${values}；样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，接收=${bytes} 字节`);
       }, 5000);
       process.once('SIGINT', stop);
       ws.onopen = () => {
@@ -141,8 +150,8 @@ export async function capture(seconds) {
       ws.onclose = () => finish(new Error('设备数据通道提前关闭；检查 VS Code 设备选择和连接'));
     });
   } finally {
-    for (const fd of [csv, raw, motors, headings, velocities]) fs.closeSync(fd);
-    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles]) fs.closeSync(fd);
+    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
   }
   if (!samples) throw new Error(bytes ? '收到输出，但没有完整速度数据；请确认运行的是包含底盘采样的 Bartmoss' : '没有收到样本；请确认 Bartmoss 运行中、LOG:ON 和无线连接正常');
   if (!parser.diagnostics) console.log('未收到 LM/LF 角度、电流记录；仅有速度数据，不能完成电机交叉诊断。');
