@@ -4,7 +4,7 @@
 
 // 智能端口填写主控上的编号 1～21；三线端口填写 'A'～'H'。
 namespace config {
-const char PROGRAM_VERSION[] = "1.1.0-voltage";
+const char PROGRAM_VERSION[] = "1.4.0-route-test";
 const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
 
 struct Motor {
@@ -53,6 +53,30 @@ const int JOYSTICK_DEADBAND = 5;  // 单位为百分比；死区外重新线性�
 const int MAX_VOLTAGE = 12000;
 const int UPDATE_TIME = 10;  // 缩短输入采样和输出更新的等待时间，实际周期可在屏幕查看。
 const vex::brakeType BRAKE_MODE = vex::coast;
+
+// 自动直线梯形规划：先实测轮径和外部传动比，再设置目标距离并启用。
+// 仅在场控/比赛开关的自动时段执行一次；未连接场控仍为手控。
+const bool AUTONOMOUS_TRAPEZOID_ENABLED = false;
+const double AUTONOMOUS_DISTANCE_CM = 0;  // 正数前进、负数后退。
+const double DRIVE_WHEEL_DIAMETER_CM = 0;  // 待实测，0 会拒绝运动。
+const double DRIVE_MOTOR_REVS_PER_WHEEL_REV = 1;  // 外部减速比，不含电机内部齿轮箱。
+const double DRIVE_MAX_SPEED_CM_PER_SEC = 30;
+const double DRIVE_ACCELERATION_CM_PER_SEC2 = 30;
+const double DRIVE_DECELERATION_CM_PER_SEC2 = 30;
+
+// 无场控路线测试：Y 按一下开始，再按一下中止。单位为电机输出轴，不假定轮径。
+const double DRIVE_TEST_LONG_MOTOR_REVS = 3;
+const double DRIVE_TEST_SHORT_MOTOR_REVS = 0.25;
+const double DRIVE_TEST_MAX_RPM = 120;
+const double DRIVE_TEST_ACCEL_RPM_PER_SEC = 120;
+const double DRIVE_TEST_DECEL_RPM_PER_SEC = 120;
+// 路线：直线长程 → 停稳后等待 → 原地右转 → 停车。
+// 转弯按输出轴转数控制，不代表固定车身角度。
+const double DRIVE_TEST_TURN_MOTOR_REVS = 0.75;
+const double DRIVE_TEST_TURN_MAX_RPM = 60;
+const double DRIVE_TEST_TURN_ACCEL_RPM_PER_SEC = 60;
+const double DRIVE_TEST_TURN_DECEL_RPM_PER_SEC = 60;
+const double DRIVE_TEST_ROUTE_PAUSE_SEC = 0.6;
 
 enum class Button { R1, R2, L1, L2, A, B, X, Y, Up, Down, Left, Right };
 // 按住控制机构运动；气动采用按下沿切换。

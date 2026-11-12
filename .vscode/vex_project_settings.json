@@ -5,7 +5,7 @@
 	},
 	"project": {
 		"name": "Bartmoss",
-		"description": "2026-2027 Bartmoss driver control v1.1.0-voltage",
+		"description": "2026-2027 Bartmoss v1.4.0-route-test - 梯形速度及测试代码",
 		"creationDate": "2026/11/02 00:00:00",
 		"platform": "V5",
 		"language": "cpp",
