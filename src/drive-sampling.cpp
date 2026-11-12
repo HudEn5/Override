@@ -164,5 +164,11 @@ void PrintSample(const sample& value, unsigned int dropped) {
          value.sequence, value.time_ms, value.LM_deg, value.LM_current_A,
          value.LF_deg, value.LF_current_A, value.diagnostic_mask);
   fflush(stdout);
+  printf("DSQ,%u,%.1f,%u,%u,%d,%d,%.2f,%.2f,%d,%d\n", value.sequence, value.time_ms,
+         value.left.rejected_rpm_mask, value.right.rejected_rpm_mask,
+         value.left.encoder_velocity_valid, value.right.encoder_velocity_valid,
+         value.left.encoder_rpm, value.right.encoder_rpm,
+         value.left.velocity_valid, value.right.velocity_valid);
+  fflush(stdout);
 }
 }  // 底盘采样命名空间

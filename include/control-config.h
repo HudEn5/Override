@@ -5,11 +5,22 @@
 #include "heading-control.h"
 #include "velocity-control.h"
 #include "trapezoid-motion.h"
+#include "drive-straight.h"
+#include "program-mode.h"
 
 // 智能端口填写主控上的编号 1～21；三线端口填写 'A'～'H'。
 namespace config {
-const char PROGRAM_VERSION[] = "1.1.0-voltage";
+const char PROGRAM_VERSION[] = "1.2.0-control";
 const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
+// 测试模式保留原有按键；比赛模式仅在场控已启用自动阶段执行 src/route.cpp。
+#ifndef BARTMOSS_COMPETITION
+#define BARTMOSS_COMPETITION 0  // 0 测试；1 比赛。脚本也可用 -Mode 明确指定并分目录编译。
+#endif
+#if BARTMOSS_COMPETITION != 0 && BARTMOSS_COMPETITION != 1
+#error BARTMOSS_COMPETITION must be 0 or 1
+#endif
+constexpr runtime::program_mode PROGRAM_MODE = BARTMOSS_COMPETITION ?
+    runtime::program_mode::competition : runtime::program_mode::test;
 
 struct Motor {
   int port;
@@ -101,6 +112,15 @@ const drive::feedforward_config FF_TEST_LEFT = TestFeedforward(372.573735, 17.90
 const drive::feedforward_config FF_TEST_RIGHT = TestFeedforward(408.162564, 16.537990);
 const drive::feedforward_config FF_TEST_LEFT_REVERSE = TestFeedforward(547.829766, 16.939618);
 const drive::feedforward_config FF_TEST_RIGHT_REVERSE = TestFeedforward(537.033135, 15.870378);
+inline drive::straight_config StraightControl() {
+  drive::straight_config result;
+  result.motion = TP_TEST;
+  result.heading = FF_HEADING;
+  result.pid = DRIVE_VELOCITY_PID;
+  result.left_forward = FF_TEST_LEFT; result.right_forward = FF_TEST_RIGHT;
+  result.left_reverse = FF_TEST_LEFT_REVERSE; result.right_reverse = FF_TEST_RIGHT_REVERSE;
+  return result;
+}
 const vex::brakeType BRAKE_MODE = vex::coast;
 
 enum class Button { R1, R2, L1, L2, A, B, X, Y, Up, Down, Left, Right };

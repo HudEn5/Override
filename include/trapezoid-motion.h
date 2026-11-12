@@ -19,6 +19,8 @@ struct trapezoid_config {
   double deceleration_rpm_s = 120;
   double position_kP = 0.25;  // rpm/mm，与原距离测试的比例增益一致。
   double max_position_correction_rpm = 20;
+  double minimum_settle_rpm = 15;  // 窗口外回调不再请求 1～4 rpm，避免长时间卡在静摩擦区。
+  double braking_delay_ms = 200;   // 制动距离预留响应时间；调试初值，需实车验证。
   double position_tolerance_mm = 5;
   double velocity_tolerance_rpm = 5;
   double settle_ms = 250;
@@ -45,6 +47,9 @@ class trapezoid_motion {
  public:
   void Configure(const trapezoid_config& value) { config = value; info = trapezoid_info(); }
   const trapezoid_info& Info() const { return info; }
+  void Reset() { info = trapezoid_info(); }
+  void Complete() { info = trapezoid_info(); Finish("DONE", 5); }
+  void Reject(const char* status) { Fail(status); }
   void Cancel() { if (info.running) Finish("CANCEL", 6); }
 
   bool Start(int direction, double max_rpm, const position_feedback& position,
@@ -54,6 +59,8 @@ class trapezoid_motion {
         !Positive(config.distance_mm) || !Positive(config.acceleration_rpm_s) ||
         !Positive(config.deceleration_rpm_s) || !Nonnegative(config.position_kP) ||
         !Positive(config.max_position_correction_rpm) || !Positive(config.position_tolerance_mm) ||
+        !Positive(config.minimum_settle_rpm) || config.minimum_settle_rpm > config.max_position_correction_rpm ||
+        !Nonnegative(config.braking_delay_ms) ||
         !Positive(config.velocity_tolerance_rpm) || !Nonnegative(config.settle_ms) ||
         !Positive(config.timeout_margin_ms) || !Positive(config.max_update_ms) ||
         !Positive(max_rpm) || max_rpm > 600 || (direction != 1 && direction != -1) ||
@@ -74,6 +81,7 @@ class trapezoid_motion {
     goal = direction * config.distance_mm;
     started_at = previous_time = now;
     settled_at = -1;
+    finishing = false;
     info.running = true; info.phase = 1; info.status = "ACCEL";
     info.time_ms = now; info.duration_ms = profile.duration() * 1000;
     info.remaining_mm = goal;
@@ -98,21 +106,36 @@ class trapezoid_motion {
     if (!std::isfinite(info.distance_mm) || !std::isfinite(info.remaining_mm)) return Fail("POSITION ERR");
     const bool near = std::fabs(info.remaining_mm) <= config.position_tolerance_mm;
     const bool reference_done = info.elapsed_ms >= info.duration_ms;
+    const bool passed_goal = goal > 0 ? info.remaining_mm < 0 : info.remaining_mm > 0;
+    finishing = finishing || reference_done || near || passed_goal;
     const bool settled = reference_done && near &&
         std::fabs(speed.left_rpm) <= config.velocity_tolerance_rpm &&
         std::fabs(speed.right_rpm) <= config.velocity_tolerance_rpm;
     if (!settled) settled_at = -1;
     else if (settled_at < 0) settled_at = now;
     if (settled && now - settled_at >= config.settle_ms) { Finish("DONE", 5); return true; }
-    info.phase = reference_done ? 4 : (info.elapsed_ms < profile.accelerationTime() * 1000 ? 1 :
+    info.phase = finishing ? 4 : (info.elapsed_ms < profile.accelerationTime() * 1000 ? 1 :
         (info.elapsed_ms < (profile.accelerationTime() + profile.cruiseTime()) * 1000 ? 2 : 3));
     info.status = info.phase == 1 ? "ACCEL" : info.phase == 2 ? "CRUISE" :
                   info.phase == 3 ? "DECEL" : "SETTLE";
     const double correction = Clamp(config.position_kP * (reference.position - info.distance_mm),
                                      config.max_position_correction_rpm);
-    const double requested = Clamp(info.reference_rpm + correction, maximum_rpm);
+    double requested = Clamp(info.reference_rpm + correction, maximum_rpm);
+    if (finishing) {
+      const double magnitude = std::min(maximum_rpm, std::max(config.minimum_settle_rpm,
+          std::min(config.max_position_correction_rpm, config.position_kP * std::fabs(info.remaining_mm))));
+      requested = info.remaining_mm > 0 ? magnitude : -magnitude;
+    } else {
+      // 按实际剩余距离和实测速度提前减速，避免位置纠偏在减速段仍把目标维持在最高速。
+      const double toward_goal = std::max(0.0, (goal > 0 ? 1 : -1) *
+          (speed.left_rpm / 2.0 + speed.right_rpm / 2.0) * mm_s_per_rpm);
+      const double distance = std::max(0.0, std::fabs(info.remaining_mm) -
+          config.position_tolerance_mm - toward_goal * config.braking_delay_ms / 1000);
+      const double cap = std::sqrt(2 * config.deceleration_rpm_s * mm_s_per_rpm * distance) / mm_s_per_rpm;
+      requested = Clamp(requested, cap);
+    }
     // 到达位置窗口后直接制动，等实际速度也稳定；故障和松手同样立即制动。
-    info.target_rpm = reference_done && near ? 0 : motion::limitVelocity(info.target_rpm,
+    info.target_rpm = near ? 0 : motion::limitVelocity(info.target_rpm,
         requested, config.acceleration_rpm_s, config.deceleration_rpm_s, dt);
     if (!std::isfinite(info.target_rpm)) return Fail("TP CONFIG");
     return true;
@@ -135,5 +158,6 @@ class trapezoid_motion {
   motion::TrapezoidProfile profile{0, 1, 1, 1};
   double origin_left = 0, origin_right = 0, mm_per_degree = 0, mm_s_per_rpm = 0;
   double maximum_rpm = 0, goal = 0, started_at = 0, previous_time = 0, settled_at = -1;
+  bool finishing = false;
 };
 }  // 底盘轨迹控制命名空间

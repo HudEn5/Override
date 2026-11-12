@@ -212,11 +212,13 @@ drive::feedback ReadDriveFeedback() {
         values[side]->online = true;
         values[side]->rpm = motors[side]->velocity(vex::rpm);
         values[side]->millivolts = motors[side]->voltage(vex::voltageUnits::mV);
+        // 八台均读取位置，供 TP 速度差分和 SDK 异常转速替代使用。
+        values[side]->position_deg = motors[side]->position(vex::deg);
+        values[side]->position_valid = std::isfinite(values[side]->position_deg);
         if (side == 0 && i < 2) {
           // 保留 LM 与同侧 LF 的独立位置、电流读数，便于和 SDK 转速交叉比较。
-          values[side]->position_deg = motors[side]->position(vex::deg);
           values[side]->current_A = motors[side]->current(vex::amp);
-          values[side]->diagnostic_valid = std::isfinite(values[side]->position_deg) &&
+          values[side]->diagnostic_valid = values[side]->position_valid &&
                                            std::isfinite(values[side]->current_A);
         }
       }

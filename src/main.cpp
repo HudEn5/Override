@@ -3,6 +3,8 @@
 #include "turn-test.h"
 #include "drive-sampling.h"
 #include "voltage-test.h"
+#include "autonomous.h"
+#include "competition-control.h"
 #include <stdio.h>
 
 namespace {
@@ -16,6 +18,9 @@ struct controller_info {
   double dt = 0;
   turn_test_info turn;
   voltage_test_info voltage;
+  autonomous_info automatic;
+  bool autonomous_period = false;
+  competition_request phase;
 };
 
 controller_info ControllerInfo;
@@ -106,10 +111,10 @@ void ControllerInfoDisplay() {
                    info.voltage.running ? static_cast<int>(info.voltage.target_rpm) :
                    info.voltage.selected_rpm, info.voltage.status);
           char left[8] = "--", right[8] = "--";
-          if (speed_available && speed.left.velocity_valid)
-            snprintf(left, sizeof(left), "%.1f", speed.left.rpm);
-          if (speed_available && speed.right.velocity_valid)
-            snprintf(right, sizeof(right), "%.1f", speed.right.rpm);
+          if (speed_available && (info.voltage.trapezoid ? speed.left.encoder_velocity_valid : speed.left.velocity_valid))
+            snprintf(left, sizeof(left), "%.1f", info.voltage.trapezoid ? speed.left.encoder_rpm : speed.left.rpm);
+          if (speed_available && (info.voltage.trapezoid ? speed.right.encoder_velocity_valid : speed.right.velocity_valid))
+            snprintf(right, sizeof(right), "%.1f", info.voltage.trapezoid ? speed.right.encoder_rpm : speed.right.rpm);
           snprintf(lines[1], sizeof(lines[1]), "L%s R%s", left, right);
           snprintf(lines[2], sizeof(lines[2]), "H%+.1f %s LOG:%s",
                    info.voltage.heading.error, info.voltage.heading.locked ? "LOCK" : "WAIT",
@@ -122,6 +127,12 @@ void ControllerInfoDisplay() {
         snprintf(lines[1], sizeof(lines[1]), "%s E%+.1f",
                  info.turn.status, info.turn.error_deg);
       }
+      if (info.autonomous_period) {
+        snprintf(lines[0], sizeof(lines[0]), "AUTO %s", info.automatic.status);
+        snprintf(lines[1], sizeof(lines[1]), "STEP %u D%+.0fmm", info.automatic.step,
+                 info.automatic.drive.motion.distance_mm);
+        snprintf(lines[2], sizeof(lines[2]), "COMP %s", info.automatic.drive.status);
+      }
       for (int row = 0; row < 3; ++row) {
         Controller.Screen.setCursor(row + 1, 1);
         Controller.Screen.print("%-19s", lines[row]);
@@ -130,23 +141,27 @@ void ControllerInfoDisplay() {
     int left_count, right_count;
     hardware::GetDriveMotorCount(left_count, right_count);
     // 保留初始化错误所在的第二行。
-    Brain.Screen.printAt(10, 60, "CFG=%d PAD=%d RUN=%d LOG=%s       ",
+    Brain.Screen.printAt(10, 60, true, "%s CFG=%d PAD=%d RUN=%d LOG=%s       ",
+                         config::PROGRAM_MODE == runtime::program_mode::test ? "TEST" : "COMP",
                          info.configured, Controller.installed(), info.enabled,
                          info.telemetry ? "ON" : "OFF");
     Brain.Screen.printAt(10, 85, "A3=%4d A1=%4d Tick=%u         ",
                          info.input.y_axis, info.input.angular_axis, info.tick);
     Brain.Screen.printAt(10, 110, "L=%6d R=%6d mV              ",
                          info.output.L_voltage, info.output.R_voltage);
-    Brain.Screen.printAt(10, 135, "FLD=%d SW=%d EN=%d DRV=%d AUTO=%d    ",
+    Brain.Screen.printAt(10, 135, "FLD=%d SW=%d EN=%d DRV=%d AUTO=%d CB=%d:%u    ",
                          Competition.isFieldControl(), Competition.isCompetitionSwitch(),
                          Competition.isEnabled(), Competition.isDriverControl(),
-                         Competition.isAutonomous());
+                         Competition.isAutonomous(), static_cast<int>(info.phase.stage), info.phase.generation);
     Brain.Screen.printAt(10, 160, "Motors L=%d/4 R=%d/4         ", left_count, right_count);
     Brain.Screen.printAt(10, 185, "U=%5d AL=%5.1f AR=%5.1f      ",
                          info.output.arm_voltage, L_angle, R_angle);
     Brain.Screen.printAt(10, 210, "R1=%d R2=%d ARM=%d dt=%4.0fms     ",
                          info.input.arm_up, info.input.arm_down, info.output.arm_enabled, info.dt);
-    if (info.voltage.visible) {
+    if (info.autonomous_period) {
+      Brain.Screen.printAt(10, 235, true, "AUTO %s STEP=%u %s                     ",
+                           info.automatic.status, info.automatic.step, info.automatic.drive.status);
+    } else if (info.voltage.visible) {
       if (info.voltage.feedforward) {
         Brain.Screen.printAt(10, 235, true, "%s %drpm %s                       ",
                              info.voltage.trapezoid ? "TP" : info.voltage.speed_control ? "SP" : "FH",
@@ -220,9 +235,12 @@ int main() {
     Brain.Screen.print("Bartmoss v%s", config::PROGRAM_VERSION);
     Controller.Screen.print("Voltage control ready");
   }
-  manual::driver_control DriverControl(config::PISTON_INITIAL_STATE);
-  turn_test TurnTest;
-  voltage_test VoltageTest(config::DRIVE_TEST_VOLTAGES, config::DRIVE_TEST_TIMEOUT_MS);
+  static manual::driver_control DriverControl(config::PISTON_INITIAL_STATE);
+  static autonomous_program Autonomous;
+  Autonomous.Configure(config::StraightControl());
+  RegisterCompetitionCallbacks();
+  static turn_test TurnTest;
+  static voltage_test VoltageTest(config::DRIVE_TEST_VOLTAGES, config::DRIVE_TEST_TIMEOUT_MS);
   VoltageTest.ConfigureFeedforward(config::FF_TEST_TARGETS, config::FF_TEST_LEFT,
                                   config::FF_TEST_RIGHT, config::TEST_MODE_HOLD_MS);
   VoltageTest.ConfigureReverseFeedforward(config::FF_TEST_LEFT_REVERSE, config::FF_TEST_RIGHT_REVERSE);
@@ -242,11 +260,13 @@ int main() {
     pre_time = current_time;
     const bool competition_connected =
         Competition.isFieldControl() || Competition.isCompetitionSwitch();
-    const bool driver_period = !competition_connected ||
-        (Competition.isEnabled() && Competition.isDriverControl());
-    const bool enabled = configured && driver_period && Controller.installed();
+    const competition_request request = ReadCompetitionRequest();
+    const runtime::permissions access = runtime::Permissions(config::PROGRAM_MODE, configured,
+        competition_connected, Competition.isEnabled(), Competition.isDriverControl(),
+        Competition.isAutonomous(), Controller.installed(), request.stage);
+    const bool enabled = access.manual;
     const manual::Input input = hardware::ReadInput();
-    const bool telemetry = Telemetry.Update(input.telemetry, Controller.installed());
+    const bool telemetry = Telemetry.Update(input.telemetry, access.telemetry);
     drive::SetTelemetryEnabled(telemetry);
     manual::Output output = DriverControl.Update(
         input, enabled, config::JOYSTICK_DEADBAND, config::MAX_VOLTAGE,
@@ -257,53 +277,82 @@ int main() {
     drive::BeginCommandUpdate();
     const bool voltage_control = VoltageTest.Info().running ||
                                  input.voltage_forward || input.voltage_reverse;
-    const bool test_owns_drive = TurnTest.Update(input, output,
-        enabled && !competition_connected, current_time, voltage_control);
+    bool test_owns_drive = false;
     bool motors_online = true;
-    if (voltage_control || VoltageTest.Info().visible || input.voltage_up || input.voltage_down) {
+    if (access.autonomous || voltage_control || VoltageTest.Info().visible || input.voltage_up || input.voltage_down) {
       int left_count, right_count;
       hardware::GetDriveMotorCount(left_count, right_count);
       motors_online = left_count == 4 && right_count == 4;
     }
     drive::sample speed;
     const bool speed_available = drive::ReadLatestSample(speed);
-    const bool stopped = speed_available && speed.left.velocity_valid &&
+    bool stopped = speed_available && speed.left.velocity_valid &&
         speed.right.velocity_valid && std::fabs(speed.left.raw_average_rpm) < 5.0 &&
         std::fabs(speed.right.raw_average_rpm) < 5.0;
     double heading = 0.0;
     // 惯导状态只由主循环读取；显示和串口线程只消费带互斥锁的快照。
-    const bool inertial_ready =
-        hardware::ReadInertial(heading) == hardware::InertialState::ready;
+    const hardware::InertialState inertial_state = hardware::ReadInertial(heading);
+    const bool inertial_ready = inertial_state == hardware::InertialState::ready;
     drive::velocity_feedback velocity;
     velocity.valid = speed_available && speed.left.velocity_valid && speed.right.velocity_valid;
     velocity.sequence = speed.sequence;
     velocity.time_ms = speed.time_ms;
     velocity.left_rpm = speed.left.rpm;
     velocity.right_rpm = speed.right.rpm;
+    if (VoltageTest.Info().trapezoid || access.autonomous) {
+      // TP 用真实编码器位移差分闭环，减少 SDK 低速尖峰与额外测速滞后。
+      velocity.valid = speed_available && speed.left.encoder_velocity_valid &&
+                       speed.right.encoder_velocity_valid;
+      velocity.left_rpm = speed.left.encoder_rpm;
+      velocity.right_rpm = speed.right.encoder_rpm;
+      stopped = velocity.valid && std::fabs(velocity.left_rpm) < 5 &&
+                std::fabs(velocity.right_rpm) < 5;
+    }
     drive::position_feedback position;
-    if (VoltageTest.Info().trapezoid)
+    if (VoltageTest.Info().trapezoid || access.autonomous)
       position.valid = hardware::ReadDrivePosition(position.left_deg, position.right_deg);
-    const bool voltage_owns_drive = VoltageTest.Update(input, output,
-        enabled && !competition_connected && !test_owns_drive, motors_online, current_time,
-        stopped, inertial_ready, heading, velocity, position);
+    bool voltage_owns_drive = false;
+    if (config::PROGRAM_MODE == runtime::program_mode::test) {
+      test_owns_drive = TurnTest.Update(input, output, access.tests, current_time, voltage_control);
+      voltage_owns_drive = VoltageTest.Update(input, output, access.tests && !test_owns_drive,
+          motors_online, current_time, stopped, inertial_ready, heading, velocity, position);
+    }
+    drive::straight_feedback frame;
+    frame.velocity = velocity; frame.position = position; frame.motors_online = motors_online;
+    frame.inertial_ready = inertial_ready; frame.heading_deg = heading; frame.stopped = stopped;
+    Autonomous.Update(access.autonomous, frame, current_time);
+    if (access.autonomous) {
+      output.L_voltage = Autonomous.Info().drive.left_mV;
+      output.R_voltage = Autonomous.Info().drive.right_mV;
+    }
+    // 无论哪种环境，启动校准时都保持底盘静止。
+    if (inertial_state == hardware::InertialState::calibrating)
+      output.L_voltage = output.R_voltage = 0;
+    const bool match_brake = config::PROGRAM_MODE == runtime::program_mode::competition &&
+                             competition_connected && !access.manual;
     // 禁用或接入场控后即使测试已让出控制，也保持明确的刹车；摇杆接管会清除测试视图。
-    hardware::Apply(output, !test_owns_drive, voltage_owns_drive || VoltageTest.Info().visible);
-    const int mode = test_owns_drive ? 3 : (VoltageTest.Info().visible ?
+    hardware::Apply(output, !test_owns_drive, match_brake ||
+        inertial_state == hardware::InertialState::calibrating ||
+        voltage_owns_drive || VoltageTest.Info().visible);
+    const int mode = access.autonomous ? 7 : test_owns_drive ? 3 : (VoltageTest.Info().visible ?
         (VoltageTest.Info().trapezoid ? 6 : VoltageTest.Info().speed_control ? 5 :
          (VoltageTest.Info().feedforward ? 4 : 1)) : 0);
-    drive::PublishCommand(output.L_voltage, output.R_voltage, enabled, !test_owns_drive,
-                          mode, VoltageTest.Info().target_rpm);
+    drive::PublishCommand(output.L_voltage, output.R_voltage, enabled || access.autonomous, !test_owns_drive,
+        mode, access.autonomous ? Autonomous.Info().drive.motion.target_rpm : VoltageTest.Info().target_rpm);
     // 控制循环仅发布快照，不执行屏幕打印和串口等待。
     controller_display_mutex.lock();
     ControllerInfo.input = input;
     ControllerInfo.output = output;
     ControllerInfo.configured = configured;
-    ControllerInfo.enabled = enabled;
+    ControllerInfo.enabled = enabled || access.autonomous;
     ControllerInfo.telemetry = telemetry;
     ControllerInfo.tick = loop_count;
     ControllerInfo.dt = dt;
     ControllerInfo.turn = TurnTest.Info();
     ControllerInfo.voltage = VoltageTest.Info();
+    ControllerInfo.automatic = Autonomous.Info();
+    ControllerInfo.autonomous_period = access.autonomous;
+    ControllerInfo.phase = request;
     controller_display_mutex.unlock();
     ++loop_count;
     vex::wait(config::UPDATE_TIME, vex::msec);

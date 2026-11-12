@@ -55,7 +55,7 @@ double PlantTarget(int voltage) {
       (voltage - (voltage > 0 ? 400.0 : -400.0)) / 16.0;
 }
 
-void Simulate(int direction, int level, double distance) {
+void Simulate(int direction, int level, double distance, bool friction = false) {
   fixture f(distance);
   for (int i = 0; i < level; ++i) {
     f.input.voltage_up = true; f.Step(); f.input.voltage_up = false; f.Step();
@@ -63,16 +63,36 @@ void Simulate(int direction, int level, double distance) {
   f.input.voltage_forward = direction > 0; f.input.voltage_reverse = direction < 0;
   f.Step(); assert(f.test.Info().running && f.output.L_voltage == 0);
   double left = 0, right = 0, peak = 0;
+  drive::velocity_sampler left_sampler, right_sampler;
+  drive::motor_feedback lm[4], rm[4];
+  for (int k = 0; k < 4; ++k) {
+    lm[k].online = rm[k].online = lm[k].position_valid = rm[k].position_valid = true;
+    lm[k].position_deg = f.position.left_deg; rm[k].position_deg = f.position.right_deg;
+  }
+  left_sampler.Update(lm, f.now - 20); right_sampler.Update(rm, f.now - 20);
+  left_sampler.Update(lm, f.now); right_sampler.Update(rm, f.now);
   bool decelerated = false;
   for (int i = 0; i < 1500 && f.test.Info().running; ++i) {
-    left += 0.2 * (PlantTarget(f.output.L_voltage) - left);
-    right += 0.2 * (PlantTarget(f.output.R_voltage) - right);
+    double left_target = PlantTarget(f.output.L_voltage), right_target = PlantTarget(f.output.R_voltage);
+    if (friction && std::fabs(left) < 1 && std::abs(f.output.L_voltage) < 700) left_target = 0;
+    if (friction && std::fabs(right) < 1 && std::abs(f.output.R_voltage) < 700) right_target = 0;
+    const double left_alpha = friction ? (f.output.L_voltage == 0 ? 0.4 : 0.08) : 0.2;
+    const double right_alpha = friction ? (f.output.R_voltage == 0 ? 0.4 : 0.08) : 0.2;
+    left += left_alpha * (left_target - left);
+    right += right_alpha * (right_target - right);
     f.position.left_deg += left * 6 * 0.01;
     f.position.right_deg += right * 6 * 0.01;
     const bool sample = i % 2 == 0;
     if (sample) {
-      f.speed.left_rpm += (left - f.speed.left_rpm) / 3.0;
-      f.speed.right_rpm += (right - f.speed.right_rpm) / 3.0;
+      for (int k = 0; k < 4; ++k) {
+        lm[k].position_deg = f.position.left_deg; rm[k].position_deg = f.position.right_deg;
+        lm[k].rpm = left; rm[k].rpm = right;
+      }
+      if (friction && i % 14 == 0) rm[3].rpm = -1510; // 原始异常不能污染 TP 内环。
+      const drive::side_sample ls = left_sampler.Update(lm, f.now + 10);
+      const drive::side_sample rs = right_sampler.Update(rm, f.now + 10);
+      assert(ls.encoder_velocity_valid && rs.encoder_velocity_valid);
+      f.speed.left_rpm = ls.encoder_rpm; f.speed.right_rpm = rs.encoder_rpm;
     }
     f.Step(10, sample);
     peak = std::fmax(peak, std::fabs(f.test.Info().motion.reference_rpm));
@@ -91,6 +111,9 @@ void Simulate(int direction, int level, double distance) {
   if (distance == 1000) assert(f.test.Info().motion.elapsed_ms > 3000);
   const double last = f.test.Info().motion.distance_mm;
   f.Step(); assert(!f.test.Info().running && f.output.L_voltage == 0);
+  assert(std::strcmp(f.test.Info().status, "DONE") == 0); // 终态不被 RELEASE 覆盖。
+  f.input.voltage_forward = f.input.voltage_reverse = false; f.Step();
+  assert(std::strcmp(f.test.Info().status, "DONE") == 0);
   assert(f.test.Info().motion.distance_mm == last); // 持续按住也不重复执行。
 }
 
@@ -98,6 +121,8 @@ int main() {
   for (int direction : {-1, 1})
     for (int level = 0; level < 3; ++level) Simulate(direction, level, 500);
   Simulate(1, 0, 1000); // 动作超时由规划时长决定，不继承 SP 的固定 3 秒。
+  Simulate(1, 0, 500, true);
+  Simulate(-1, 0, 500, true); // 含响应滞后、静摩擦及 -1510 rpm 尖峰的回归模型。
   fixture f;
   f.input.telemetry = true; f.Step(); assert(!f.test.Info().running); // Y 只回传。
   f.input.voltage_forward = true; f.Step(); f.Step();
@@ -140,6 +165,7 @@ int main() {
   stalled.input.voltage_forward = true; stalled.Step();
   for (int i = 0; i < 1000 && stalled.test.Info().running; ++i) stalled.Step();
   assert(std::strcmp(stalled.test.Info().status, "TIMEOUT") == 0 && stalled.output.L_voltage == 0);
+  stalled.Step(); assert(std::strcmp(stalled.test.Info().status, "TIMEOUT") == 0);
   fixture invalid(0);
   invalid.input.voltage_forward = true; invalid.Step();
   assert(std::strcmp(invalid.test.Info().status, "TP CONFIG") == 0 && invalid.output.L_voltage == 0);

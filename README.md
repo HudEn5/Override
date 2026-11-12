@@ -1,10 +1,81 @@
-# Bartmoss v1.1.0-voltage · 2026–2027 手动控制
+# Bartmoss v1.2.0-control · 2026–2027 控制程序
 
 台式机与实验室笔记本通过 GitHub `main` 同步，操作见 [DEVICE_SYNC.md](DEVICE_SYNC.md)。
 另一台电脑的 Codex 可从 [LAPTOP_PROMPT.md](LAPTOP_PROMPT.md) 接手；实测记录写入 [LAB_NOTES.md](LAB_NOTES.md)。
 
 VEX V5 八电机差速底盘手控工程，手臂采用直接电压控制。
 沿用参考工程 Tungsten 的设备命名。当前版本用于实机调试，尚未完成整机验证。
+
+## 自动、手动和测试环境
+
+参考 Tungsten 的 `main.cpp`、`route.cpp`、`chassis::MovementDrive()` 分层：
+注册比赛入口，路线只下达动作，统一控制循环负责电机输出。
+
+| 层 | Bartmoss 文件 | 职责 |
+| --- | --- | --- |
+| 比赛接入 | `src/competition-control.cpp` | 注册 `Competition.autonomous(autonomous)` 和 `Competition.drivercontrol(usercontrol)` |
+| 正式路线 | `src/route.cpp` | 非阻塞编排比赛自动动作，默认 EMPTY，不自动执行测试路线 |
+| 自动生命周期 | `src/autonomous.cpp` | 等待就绪、每自动时段执行一次、离开自动时段取消 |
+| 手控 | `include/driver-control-logic.h` | Axis3/Axis1、手臂、夹爪、气动的原有手控 |
+| 手柄测试 | `include/voltage-test.h`、`src/turn-test.cpp` | VTEST/FH/SP/TP 与 A/B，仅在测试环境无场控时启用 |
+| 公共直行 | `include/drive-straight.h` | 距离/最高速度接口，共用梯形、位置/航向修正、前馈和速度 PID |
+
+Tungsten 由常驻底盘线程在自动目标与手柄目标间切换；Bartmoss 保持同一个主控制线程拥有电机输出。
+两个 VEX 回调只通过 mutex 发布阶段快照，不读写底盘或创建运动线程。
+主循环同时检查回调阶段、场控连接、Enabled、Autonomous/DriverControl，禁用立即撤销动作。
+比赛自动不依赖手柄在线，不接受 A/B、方向键测试或 Y 回传；测试版本不会因场控进入自动时段执行比赛路线。
+控制线程持续存在，两个比赛回调均立即返回；SDK 的阶段切换不终止常驻采样/显示线程。
+主控显示 `TEST` / `COMP`，`CB=1` 为自动回调、`CB=2` 为手动回调，冒号后为通知次数。
+
+默认仍是测试环境。在 `include/control-config.h` 中，`BARTMOSS_COMPETITION=0` 为测试、1 为比赛。
+通过 VEX 扩展日常下载时，修改该默认宏并完整重编译，下载后核对主控 TEST/COMP 标识。
+也可分别构建，不覆盖默认下载文件：
+
+~~~powershell
+.\scripts\build.ps1 -Rebuild -Mode Test
+.\scripts\build.ps1 -Rebuild -Mode Competition
+~~~
+
+输出分别为 `build/test/Bartmoss.bin` 和 `build/competition/Bartmoss.bin`；两个显式模式使用独立对象目录。
+脚本无 `-Mode` 时沿用头文件默认值，输出 `build/Bartmoss.bin`，与现有 VEX 下载流程相同。
+VS Code 也提供对应的两项构建任务；构建不会自动下载或运行程序，也不会自动切换扩展的下载文件。
+
+## 公共直行接口与比赛路线
+
+纯控制器先由主循环传入反馈和运行许可，路线代码只需调用：
+
+~~~cpp
+StartDriveStraight(500, 100);   // 前进 500 mm，最高输出轴 100 rpm
+StartDriveStraight(-500, 100);  // 后退；这两行不能连续调用来代替等待完成
+~~~
+
+正在运动时再次 Start 返回 false，不覆盖已有动作；零距离为无运动的 DONE。
+单位、前馈/PID、加减速和容差仍来自现有配置；TP 与比赛实例使用同一个 straight_controller 实现。
+比赛每个动作锁定当时朝向，TP 保留同一测试会话的参考朝向。退出、故障或取消均清空速度环输出。
+全部接口仅由主线程调用；主循环继续执行 Update，不能在路线中写 while/wait 阻塞它。
+
+正式路线位于 `src/route.cpp` 的 `autonomous_program::RunRoutine()`，默认只 `FinishRoutine("EMPTY")`。
+以下是替换函数体后的单段直行示例，当前默认程序没有启用它：
+
+~~~cpp
+switch (info.step) {
+  case 0:
+    if (!StartDriveStraight(500, 100)) {
+      FinishRoutine("START ERROR");
+      return;
+    }
+    info.step = 1;
+    break;
+  case 1:
+    if (DriveStraightState() == drive::straight_state::done)
+      FinishRoutine();
+    break;
+}
+~~~
+
+路线在硬件、惯导和速度反馈就绪、车辆静止后才启动。运动错误会终止整条路线，
+同一自动时段完成/失败后不重复执行，下一次自动时段重新开始。
+SDK 比赛回调注册及阶段切换只做了软件与编译验证，尚未通过真实场控/比赛开关进行实车验证。
 
 ## 手柄操控
 
@@ -83,7 +154,8 @@ A 键转向仍可使用。
 每次停车长按下键 1 秒，依次切换 VTEST → FH → SP → TP → VTEST；每次切换后先松开下键。
 VTEST 独立记忆电压档位，FH/SP/TP 共用转速档位，启动默认固定电压。
 上下同时按下不会切换模式；运行、车辆尚未停稳、校准、掉线或禁用期间不允许切换。
-停车判据为八台测速有效且左右平均原始转速绝对值都小于 5 rpm；长按期间出现移动会取消手势。
+停车判据为两侧测速有效且转速绝对值都小于 5 rpm；TP 使用位置差分速度，其余模式使用原始 SDK 平均值。
+长按期间出现移动会取消手势。
 
 遥控器第一行显示 FH 或 SP、选定 / 运行中的有符号目标 rpm 和状态，第二行显示 L/R 实测滤波 rpm。
 测速不可用时显示 --，第三行显示航向误差 H、参考是否锁定及 LOG:ON/OFF。
@@ -152,6 +224,11 @@ PID 仅在新速度样本到达时更新，使用样本实际时间差，重复�
 规划统一用 mm、mm/s、秒，随后换成电机输出轴 rpm；位置纠偏用左右平均位移，航向仍由 4 号口惯导反馈。
 规划参考加减速度均为 120 rpm/s；距离 500 mm、位置比例增益 0.25 rpm/mm、纠偏上限 20 rpm、
 位置窗口 5 mm、左右滤波转速窗口各 5 rpm、停稳时间 250 ms。
+v1.1.1 起 TP 速度环使用八台电机位置差分，每侧四台取平均、20 ms 低通，
+不依赖低速下偶发尖峰的 SDK velocity 值；屏幕 TP 实测速度也来自该源。
+距离制动包络另预留 200 ms 响应时间，减速参考实际剩余距离，不只跟随参考曲线的时间。
+进入终点阶段后，在 5 mm 窗口外以至少 15 rpm、最多 20 rpm 的目标回调，仍受所选档位及变化率限制。
+这是调试初值，用于避免先前 1～4 rpm 回调长期不收敛；不保证真实地面上的 5 mm 精度。
 参数在 `config::TP_TEST` / `drive::trapezoid_config`；最高转速是上限，短距离会自动变成三角形。
 当前 500 mm、120 rpm/s 配置下，150 和 200 rpm 档的参考峰值都约 140 rpm，不会强行加速到选定上限。
 
@@ -160,10 +237,11 @@ PID 仅在新速度样本到达时更新，使用样本实际时间差，重复�
 TP 在低速时还把航向差速对应的目标偏移限制在中心目标的 25% 内，避免静摩擦电压使目标跨过零点。
 规划结束后还需实际位移和速度满足窗口并持续稳定，不能仅按规划时间宣布完成。
 进入终点位置窗口后直接 brake 等待停稳；取消和故障同样立即制动。
+DONE/TIMEOUT/规划错误终态保留在屏幕，继续按住不会重复运动；下次起步或切换模式才更新。
 超时为规划时长 +3 秒，不继承 VTEST/FH/SP 的固定 3 秒运行上限。
 所有输出仍由主循环统一发送，显示、回传只读取由 mutex 保护的快照。
 
-TP 仅用于无场控的手柄调试，尚未接管比赛自动时段；本阶段只集成直线前进/后退，不新增弧线或转弯路线。
+TP 仅用于无场控测试环境，比赛自动从独立的 route.cpp 调用公共直行层；本阶段不新增弧线或转弯路线。
 数学规划、合成负载跟随、完成判据、取消和故障检查通过；尚未执行合并版的实车下载或验证。
 现有前馈只完成 100～200 rpm 的基础实测，TP 经过的低速区与终点表现仍需测试；首次用 100 rpm 档。
 
@@ -225,11 +303,11 @@ ARM_UP_DIRECTION 控制统一动作方向，默认 1。
 
 未连接场控时，配置有效且手柄连接即可调试。
 连接场控后，仅在已启用的手动时段输出；禁用、自动时段或手柄断连时电机停止，气动保持状态。
-本工程没有自动动作，场控禁用期间的实际电机行为由 VEX 系统接管。
+比赛模式支持独立自动路线，当前路线默认 EMPTY；场控禁用期间的实际电机行为由 VEX 系统接管。
 
 ## 诊断与监测
 
-主控标题为 Bartmoss v1.1.0-voltage，底行显示底盘转向测试状态。
+主控标题为 Bartmoss v1.2.0-control，并显示 TEST/COMP；底行显示对应测试或比赛自动状态。
 遥控器第三行显示 VLT、LOG:ON/OFF（回传开关）和 M（两侧手臂在线状态）。
 第一行 U 表示手臂指令电压（V），L/R 为两侧相对编码器角度。
 第二行 1/2/E/C 分别表示 R1、R2、手臂允许控制及配置状态。
@@ -261,10 +339,15 @@ sequence 是内部采样序号，因此正常回传时通常相隔约 10；dt_ms
 电机速度单位为内部减速箱输出轴 rpm，加速度为 rpm/s，电压为 mV。
 轮径和外部传动比确定后，再与路线规划的 mm/s 做换算。
 左、右侧各四台电机全部有效时才计算该侧平均值，并保留每台的原始速度。
+SDK 转速绝对值超过 720 rpm（600 rpm 底盘留 20% 余量）或非有限时标记异常。
+有限但超量程的值具有可信位置差分时，用同一台电机的位置差分替代后进入 SDK 滤波；
+没有可信替代或 SDK 读数非有限，则该 SDK 速度无效。
+原始可读 SDK 值仍保留在 DS2，不能把被标记的尖峰拿去拟合前馈；TP 始终使用独立的位置差分速度。
+位置差分要求前后样本、八台位置和实际时间间隔有效，异常位置跳变或长间隔会使该速度无效并停止 TP。
 滤波与加速度使用实际采样时间，首样本、掉线恢复及超过 200 ms 的间隔后，加速度标为无效。
 
 新版输出使用 DS2 格式（29 列），在原 DSV 27 列之后追加 mode、target_rpm。
-mode：0 手控，1 固定电压测试，2 旧版纯前馈，3 自动动作，4 FH，5 SP，6 TP。
+mode：0 手控，1 固定电压测试，2 旧版纯前馈，3 A/B 测试，4 FH，5 SP，6 TP，7 比赛自动。
 接收脚本兼容旧 DSV，为旧数据补 mode=-1（未知）、target_rpm=0，不推测旧版的转速目标。
 主控无法直接连接电脑时，可使用遥控器和 VS Code 转发：
 
@@ -299,6 +382,11 @@ motion_time_ms 为主循环快照时间，sequence 关联本次发送的速度�
 phase：0 空闲、1 加速、2 匀速、3 减速、4 等待停稳、5 完成、6 取消、7 故障。
 reference 为纯规划参考；target_rpm 含位置纠偏和变化率限制，DVL 两侧目标还包含航向修正。
 所有记录继续共用 Y 开关、200 ms 回传间隔和同一串口线程，不新增持续打印线程。
+v1.1.1 另输出 DSQ，保存到 `-quality.csv`：
+sequence,time_ms,left_rejected_mask,right_rejected_mask,left_encoder_valid,right_encoder_valid,left_encoder_rpm,right_encoder_rpm,left_sdk_valid,right_sdk_valid。
+异常掩码第 0～3 位分别对应各侧四台电机；右侧第 3 位（8）对应 RBU。
+encoder_rpm 是 TP 真正使用的速度，DS2 的 left_rpm/right_rpm 仍为清理后的 SDK 滤波速度。
+接收脚本在 TP 模式优先显示同序号的 DSQ 速度；老固件没有该行时显示 --，原始 CSV 仍可接收。
 diagnostic_mask 第 0 位表示 LM 有效，第 1 位表示 LF 有效，3 表示两台均有效。
 角度为电机减速箱输出轴累计度数，电流单位 A。诊断与 Y 开关、5 Hz 回传及快照互斥锁共用。
 可离线用相邻有效记录的角度差 / (6 × 实际时间差秒数) 计算区间平均 rpm，再和同一时间区间的 SDK 转速比较。
@@ -340,6 +428,7 @@ include/drive-control.h 提供独立的 motor_feedforward 类，其 Calculate �
 `queue_mutex` 保护采样队列、最新速度快照、指令元数据、更新标记、版本号和回传开关。
 锁内只做短时状态访问，不持锁读取电机、刷新屏幕、打印串口或等待。
 两把锁不嵌套持有。电机输出仅由主线程执行，设备指针在启动其他线程前初始化，随后不替换。
+`phase_mutex` 另保护比赛回调的阶段与代次；只在锁内复制数据，不持锁执行路线或设备操作。
 完整软件快照不代表八台电机的物理采样时刻完全一致；采样与指令对应仍需查看时间和有效标记。
 
 ## 测试和文件
@@ -364,6 +453,16 @@ g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/trapezoid-profil
 ./build/trapezoid-profile-test
 g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/trapezoid-motion-test.cpp -o build/trapezoid-motion-test
 ./build/trapezoid-motion-test
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/drive-straight-test.cpp -o build/drive-straight-test
+./build/drive-straight-test
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include tests/program-mode-test.cpp -o build/program-mode-test
+./build/program-mode-test
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include src/autonomous.cpp tests/autonomous-test.cpp -o build/autonomous-test
+./build/autonomous-test
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic -I include src/autonomous.cpp src/route.cpp tests/empty-autonomous-test.cpp -o build/empty-autonomous-test
+./build/empty-autonomous-test
+g++ -std=c++11 -Wall -Wextra -Werror -pedantic -pthread -I tests/competition-mocks -I include src/competition-control.cpp tests/competition-control-test.cpp -o build/competition-control-test
+./build/competition-control-test
 node tests/drive-websocket-test.mjs
 g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic -pthread -I tests/sampling-mocks -I include src/drive-sampling.cpp tests/drive-sampling-test.cpp -o build/drive-sampling-test
 ./build/drive-sampling-test
@@ -385,6 +484,10 @@ g++ -std=c++11 -O2 -Wall -Wextra -Werror -pedantic -pthread -I tests/sampling-mo
 - include/drive-velocity.h：SP/TP 共用的前馈、电压速度环和反馈时效检查。
 - include/trapezoid-profile.h：来自同事分支的纯梯形数学规划和速度变化率限制。
 - include/trapezoid-motion.h：直线参考跟随、平均位置纠偏、终点停稳与超时。
+- include/drive-straight.h：与测试按键无关的公共非阻塞直行控制器。
+- src/competition-control.cpp：VEX 比赛回调和互斥保护的阶段通知。
+- src/autonomous.cpp、src/route.cpp：比赛生命周期与独立路线。
+- include/program-mode.h：测试/比赛权限及场控状态互锁。
 - scripts/、vex/、makefile、.vscode/：构建、只读监测及工程配置。
 
 切换前的完整 PID 工程和校验清单保存在本地 build/backups/ 中。

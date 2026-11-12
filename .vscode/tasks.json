@@ -2,6 +2,20 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "VEX: build test environment",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build.ps1", "-Rebuild", "-Mode", "Test"],
+      "problemMatcher": []
+    },
+    {
+      "label": "VEX: build competition environment",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build.ps1", "-Rebuild", "-Mode", "Competition"],
+      "problemMatcher": []
+    },
+    {
       "label": "VEX: pull GitHub main now",
       "type": "process",
       "command": "powershell.exe",

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER } from '../scripts/monitor-drive-websocket.mjs';
+import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER } from '../scripts/monitor-drive-websocket.mjs';
 
 // 协议契约测试：模拟串口跨消息分片，不能将半行误写成完整样本。
 const received = [];
@@ -58,6 +58,16 @@ assert.equal(PROFILE_HEADER.split(',').length, 11);
 assert.deepEqual(profileRows, [profile]);
 assert.equal(profileParser.profiles, 1);
 assert.equal(profileParser.malformed, 2);
+const qualityRows = [];
+const qualityParser = new DriveLines(noProfile, noProfile, noProfile, noProfile, noProfile,
+  row => qualityRows.push(row));
+const quality = ['10', '4000', '0', '8', '1', '1', '0.00', '0.00', '1', '1'];
+const qualityStream = `#web#DSQ,${quality.join(',')}\nDSQ,broken\n`;
+for (let i = 0; i < qualityStream.length; i += 3) qualityParser.push(qualityStream.slice(i, i + 3));
+assert.equal(QUALITY_HEADER.split(',').length, 10);
+assert.deepEqual(qualityRows, [quality]);
+assert.equal(qualityParser.qualities, 1);
+assert.equal(qualityParser.malformed, 1);
 parser.push('x'.repeat(65537));
 assert.equal(parser.pending, '');
 // 已有真实旧版日志也必须完整兼容，不改动原文件。
@@ -70,4 +80,4 @@ for (const [name, count] of [['1794412458993', 68], ['1794413751103', 119]]) {
   assert.equal(n, count);
   assert.equal(old.malformed, 0);
 }
-console.log('WebSocket protocol checks passed: DS2, DLM, DHD, DVL, DTP, legacy DSV, fragments and invalid rows.');
+console.log('WebSocket protocol checks passed: DS2, DLM, DHD, DVL, DTP, DSQ, legacy DSV, fragments and invalid rows.');

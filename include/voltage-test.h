@@ -6,6 +6,7 @@
 #include "velocity-control.h"
 #include "drive-velocity.h"
 #include "trapezoid-motion.h"
+#include "drive-straight.h"
 #include <cmath>
 
 struct voltage_test_info {
@@ -28,6 +29,7 @@ struct voltage_test_info {
 class voltage_test {
  public:
   voltage_test(const int (&voltages)[3], double timeout_ms) : timeout(timeout_ms) {
+    straight_settings.heading_enabled = false;
     for (int i = 0; i < 3; ++i) levels[i] = voltages[i];
     info.millivolts = levels[0];
   }
@@ -37,15 +39,22 @@ class voltage_test {
   void ConfigureHeading(const drive::heading_config& config) {
     heading.Configure(config);
     info.heading_enabled = true;
+    straight_settings.heading = config;
+    straight_settings.heading_enabled = true;
+    Straight.Configure(straight_settings);
   }
 
   void ConfigureVelocityPID(const drive::velocity_pid_config& config) {
     velocity.ConfigurePID(config);
     velocity_configured = true;
+    straight_settings.pid = config;
+    Straight.Configure(straight_settings);
   }
 
   void ConfigureTrapezoid(const drive::trapezoid_config& config) {
-    Motion.Configure(config);
+    straight_settings.motion = config;
+    straight_settings.retain_heading = true;
+    Straight.Configure(straight_settings);
     trapezoid_configured = true;
   }
 
@@ -53,6 +62,9 @@ class voltage_test {
                             const drive::feedforward_config& right, double hold_ms) {
     for (int i = 0; i < 3; ++i) targets[i] = rpm[i];
     velocity.ConfigureForward(left, right);
+    straight_settings.left_forward = straight_settings.left_reverse = left;
+    straight_settings.right_forward = straight_settings.right_reverse = right;
+    Straight.Configure(straight_settings);
     mode_hold_ms = hold_ms;
     info.selected_rpm = targets[ff_level];
   }
@@ -61,6 +73,8 @@ class voltage_test {
   void ConfigureReverseFeedforward(const drive::feedforward_config& left,
                                    const drive::feedforward_config& right) {
     velocity.ConfigureReverse(left, right);
+    straight_settings.left_reverse = left; straight_settings.right_reverse = right;
+    Straight.Configure(straight_settings);
   }
 
   bool Update(const manual::Input& input, manual::Output& output, bool allowed,
@@ -69,6 +83,10 @@ class voltage_test {
               const drive::velocity_feedback& speed = drive::velocity_feedback(),
               const drive::position_feedback& position = drive::position_feedback()) {
     velocity.Observe(speed, now_ms);
+    drive::straight_feedback frame;
+    frame.velocity = speed; frame.position = position; frame.motors_online = motors_online;
+    frame.inertial_ready = inertial_ready; frame.heading_deg = angle; frame.stopped = stopped;
+    Straight.Observe(frame, allowed, now_ms);
     bool beginning = false;
     const bool up = previous_allowed && input.voltage_up && !previous_up;
     const bool down = previous_allowed && input.voltage_down && !previous_down;
@@ -132,6 +150,7 @@ class voltage_test {
           ResetHeading();  // 主动退出/重进前馈模式时才建立新一轮参考。
           ResetSpeed();
           CancelMotion();
+          Straight.Reset(); info.motion = Straight.Info().motion;
           down_consumed = true;
         }
       }
@@ -144,11 +163,11 @@ class voltage_test {
       }
       info.millivolts = levels[level];
       info.selected_rpm = targets[ff_level];
-      info.status = "READY";
+      info.status = MotionStatus("READY");
     } else if (need_release || input.voltage_forward == input.voltage_reverse) {
       info.running = false;
       need_release = true;
-      info.status = "RELEASE";
+      info.status = MotionStatus("RELEASE");
     } else {
       down_pending = false;  // 运行中按下选择键不会累积切换或降档手势。
       const int requested_direction = input.voltage_forward ? 1 : -1;
@@ -176,23 +195,26 @@ class voltage_test {
 
     if (!info.visible) return false;
     output.L_voltage = output.R_voltage = 0;
-    double target = direction * info.selected_rpm;
-    if (info.trapezoid && info.running) {
-      bool valid = velocity.Fresh(now_ms);
-      if (valid && beginning)
-        valid = Motion.Start(direction, info.selected_rpm, position, speed, now_ms, stopped);
-      if (valid) valid = Motion.Update(position, speed, now_ms);
-      info.motion = Motion.Info();
-      if (!valid || !info.motion.running) {
-        info.running = false;
-        need_release = true;
-        info.status = valid ? info.motion.status :
-            (velocity.Fresh(now_ms) ? info.motion.status : "SPEED ERR");
-      } else {
-        target = info.motion.target_rpm;
-        info.status = info.motion.status;
-      }
+    if (info.trapezoid) {
+      if (info.running) {
+        if (beginning) {
+          if (!std::isfinite(straight_settings.motion.distance_mm) || straight_settings.motion.distance_mm <= 0)
+            Straight.Reject("TP CONFIG");
+          else Straight.StartDriveStraight(direction * straight_settings.motion.distance_mm, info.selected_rpm);
+        }
+        Straight.UpdateDriveStraight();
+        const drive::straight_info& value = Straight.Info();
+        info.running = value.state == drive::straight_state::running;
+        info.status = value.status;
+        if (!info.running) need_release = true;
+      } else Straight.CancelDriveStraight();
+      const drive::straight_info& value = Straight.Info();
+      info.motion = value.motion; info.heading = value.heading; info.velocity = value.velocity;
+      info.target_rpm = info.running ? value.motion.target_rpm : 0;
+      output.L_voltage = value.left_mV; output.R_voltage = value.right_mV;
+      return true;
     }
+    const double target = direction * info.selected_rpm;
     if (info.running && info.feedforward) {
       if (!velocity.Feedforward(target, target, output.L_voltage, output.R_voltage)) {
         info.running = false;
@@ -205,12 +227,8 @@ class voltage_test {
       output.L_voltage = output.R_voltage = direction * info.millivolts;
     }
     if (info.feedforward && info.heading_enabled) {
-      // TP 低速时静摩擦电压占比大，额外限制差速目标，避免某侧目标跨过零点。
-      const double target_limit = info.trapezoid && info.running ?
-          0.25 * std::fabs(info.target_rpm) * std::min(velocity.Slope(true, info.target_rpm),
-                                                    velocity.Slope(false, info.target_rpm)) : 12000.0;
       const bool valid = heading.Update(info.running, inertial_ready, angle, now_ms,
-                                        output.L_voltage, output.R_voltage, target_limit);
+                                        output.L_voltage, output.R_voltage);
       info.heading = heading.Info();
       if (!valid) {
         info.running = false;
@@ -236,11 +254,17 @@ class voltage_test {
   }
 
  private:
-  void ResetHeading() { heading.Reset(); info.heading = heading.Info(); }
+  const char* MotionStatus(const char* otherwise) const {
+    return info.trapezoid && (Straight.Info().state == drive::straight_state::done ||
+        Straight.Info().state == drive::straight_state::error) ? Straight.Info().status : otherwise;
+  }
+  void ResetHeading() {
+    heading.Reset(); Straight.ResetReference(); info.heading = heading.Info();
+  }
   void ResetSpeed() {
     velocity.Reset(); info.velocity = velocity.Info();
   }
-  void CancelMotion() { Motion.Cancel(); info.motion = Motion.Info(); }
+  void CancelMotion() { Straight.CancelDriveStraight(); info.motion = Straight.Info().motion; }
   bool ApplySpeed(const drive::velocity_feedback& speed, double now,
                   manual::Output& output) {
     // 外环的差速电压按当前运动方向的 kV 换算成两侧目标，内环跟踪它。
@@ -253,7 +277,8 @@ class voltage_test {
     return valid;
   }
   drive::velocity_control velocity;
-  drive::trapezoid_motion Motion;
+  drive::straight_controller Straight;
+  drive::straight_config straight_settings;
   bool trapezoid_configured = false;
   bool velocity_configured = false;
   drive::heading_hold heading;

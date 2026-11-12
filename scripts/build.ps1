@@ -2,7 +2,9 @@ param(
     [string]$SdkPath = "$env:APPDATA/Code/User/globalStorage/vexrobotics.vexcode/sdk/cpp/V5/V5_20240802_15_00_00",
     [string]$ToolchainPath = "$env:APPDATA/Code/User/globalStorage/vexrobotics.vexcode/tools/cpp/toolchain_win32",
     [string]$EnvironmentRoot = '',
-    [switch]$Rebuild
+    [switch]$Rebuild,
+    [ValidateSet('Default', 'Test', 'Competition')]
+    [string]$Mode = 'Default'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +39,11 @@ $makeArguments = @(
     ('SIZE="{0}"' -f $sizePath),
     ('OBJCOPY="{0}"' -f $objcopyPath)
 )
+if ($Mode -ne 'Default') {
+    $modeFlag = if ($Mode -eq 'Competition') { 1 } else { 0 }
+    $makeArguments += @("BUILD=build/$($Mode.ToLowerInvariant())",
+                        "DEFINES=-DVexV5 -DBARTMOSS_COMPETITION=$modeFlag")
+}
 if ($Rebuild) { $makeArguments = @('-B') + $makeArguments }
 $previousOS = $env:OS
 try {

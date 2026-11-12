@@ -60,6 +60,50 @@ int main() {
   assert(value.rpm == -100 && !value.acceleration_valid);
   assert(!sampler.Update(motors, -1).velocity_valid);
 
+  // 真实位置差分不受 SDK -1510 rpm 尖峰影响；原始值及质量标记仍可诊断。
+  drive::velocity_sampler guarded;
+  for (int i = 0; i < 4; ++i) {
+    motors[i].rpm = 100;
+    motors[i].position_valid = true;
+    motors[i].position_deg = i * 50;
+  }
+  value = guarded.Update(motors, 0);
+  assert(!value.encoder_velocity_valid && value.velocity_valid);
+  for (int i = 0; i < 4; ++i) motors[i].position_deg += 12; // 20 ms 内 12 度，即 100 rpm。
+  value = guarded.Update(motors, 20);
+  assert(value.encoder_velocity_valid && std::fabs(value.encoder_rpm - 100) < 1e-8);
+  motors[3].rpm = -1510;
+  for (int i = 0; i < 4; ++i) motors[i].position_deg += 12;
+  value = guarded.Update(motors, 40);
+  assert(value.rejected_rpm_mask == 8 && value.raw_rpm[3] == -1510);
+  assert(value.velocity_valid && std::fabs(value.rpm - 100) < 1e-8);
+  assert(std::fabs(value.encoder_rpm - 100) < 1e-8);
+  for (int i = 0; i < 4; ++i) { motors[i].position_deg += 12; motors[i].rpm = 100; }
+  value = guarded.Update(motors, 60);
+  assert(value.rejected_rpm_mask == 0 && value.velocity_valid);
+  motors[0].position_deg += 10000;
+  value = guarded.Update(motors, 80);
+  assert(!value.encoder_velocity_valid); // 位置跳变也不能送入 TP。
+  drive::velocity_sampler no_fallback;
+  motors[3].rpm = -1510;
+  value = no_fallback.Update(motors, 0);
+  assert(!value.velocity_valid && !value.encoder_velocity_valid && value.rejected_rpm_mask == 8);
+  motors[3].rpm = 100;
+  value = no_fallback.Update(motors, 400);
+  assert(!value.encoder_velocity_valid); // 长间隔不能差分出伪速度。
+  for (int i = 0; i < 4; ++i) { motors[i].position_deg -= 6; motors[i].rpm = -50; }
+  value = no_fallback.Update(motors, 420);
+  assert(value.encoder_velocity_valid && std::fabs(value.encoder_rpm + 50) < 1e-8);
+  motors[1].online = false;
+  assert(!no_fallback.Update(motors, 440).encoder_velocity_valid);
+  drive::velocity_sampler parked;
+  for (int i = 0; i < 4; ++i) { motors[i].online = true; motors[i].rpm = 0; }
+  parked.Update(motors, 0); parked.Update(motors, 20);
+  motors[3].rpm = -1510;
+  value = parked.Update(motors, 40);
+  assert(value.encoder_velocity_valid && value.encoder_rpm == 0);
+  assert(value.velocity_valid && value.rpm == 0 && value.rejected_rpm_mask == 8);
+
   // 以下参数仅为数学测试数据，不代表实车辨识结果。
   drive::feedforward_config config;
   drive::motor_feedforward missing(config);
