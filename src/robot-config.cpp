@@ -1,5 +1,6 @@
 #include "robot-config.h"
 #include "control-config.h"
+#include <cmath>
 
 vex::brain Brain;
 vex::controller Controller(vex::primary);
@@ -23,6 +24,9 @@ namespace {
 vex::motor** const LeftDrive[4] = {&LF, &LM, &LBD, &LBU};
 vex::motor** const RightDrive[4] = {&RF, &RM, &RBD, &RBU};
 bool arm_moving = false;
+vex::inertial* Inertial = nullptr;
+vex::timer InertialTimer;
+bool inertial_calibration_started = false;
 
 bool RegisterPort(int port, bool required, bool (&used)[22]) {
   if (port == 0 && !required) return true;
@@ -130,6 +134,14 @@ bool Initialize() {
   Claw = CreateMotor(config::Claw, config::CLAW_BRAKE_MODE);
   TogglePiston = new vex::digital_out(ThreeWirePort(config::TogglePiston));
   TogglePiston->set(config::PISTON_INITIAL_STATE);
+  if (config::INERTIAL_PORT != 0) {
+    Inertial = new vex::inertial(config::INERTIAL_PORT - 1, vex::turnType::left);
+    if (Inertial->installed()) {
+      Inertial->calibrate();
+      InertialTimer.reset();
+      inertial_calibration_started = true;
+    }
+  }
   return true;
 }
 
@@ -143,13 +155,27 @@ manual::Input ReadInput() {
   input.claw_close = Pressed(config::ClawClose);
   input.claw_open = Pressed(config::ClawOpen);
   input.toggle = Pressed(config::Toggle);
+  input.turn_test = Pressed(config::TurnTest);
+  input.square_test = Pressed(config::SquareTest);
+  input.telemetry = Pressed(config::Telemetry);
+  input.voltage_up = Pressed(config::VoltageUp);
+  input.voltage_down = Pressed(config::VoltageDown);
+  input.voltage_forward = Pressed(config::VoltageForward);
+  input.voltage_reverse = Pressed(config::VoltageReverse);
   return input;
 }
 
-void Apply(const manual::Output& output) {
-  for (int i = 0; i < 4; ++i) {
-    SetVoltage(*LeftDrive[i], output.L_voltage);
-    SetVoltage(*RightDrive[i], output.R_voltage);
+void Apply(const manual::Output& output, bool manual_drive, bool brake_drive) {
+  if (manual_drive) {
+    for (int i = 0; i < 4; ++i) {
+      // 测试停车直接刹车，避免先按普通手控停止方式再发一次刹车。
+      if (brake_drive && output.L_voltage == 0) {
+        if (*LeftDrive[i]) (*LeftDrive[i])->stop(vex::brake);
+      } else SetVoltage(*LeftDrive[i], output.L_voltage);
+      if (brake_drive && output.R_voltage == 0) {
+        if (*RightDrive[i]) (*RightDrive[i])->stop(vex::brake);
+      } else SetVoltage(*RightDrive[i], output.R_voltage);
+    }
   }
   const bool arm_ready = ArmL && ArmR && ArmL->installed() && ArmR->installed();
   const int voltage = output.arm_enabled && arm_ready ? output.arm_voltage : 0;
@@ -174,5 +200,80 @@ void GetDriveMotorCount(int& left_count, int& right_count) {
     if (*LeftDrive[i] && (*LeftDrive[i])->installed()) ++left_count;
     if (*RightDrive[i] && (*RightDrive[i])->installed()) ++right_count;
   }
+}
+
+drive::feedback ReadDriveFeedback() {
+  drive::feedback result;
+  for (int i = 0; i < 4; ++i) {
+    vex::motor* motors[2] = {*LeftDrive[i], *RightDrive[i]};
+    drive::motor_feedback* values[2] = {&result.left[i], &result.right[i]};
+    for (int side = 0; side < 2; ++side) {
+      if (motors[side] && motors[side]->installed()) {
+        values[side]->online = true;
+        values[side]->rpm = motors[side]->velocity(vex::rpm);
+        values[side]->millivolts = motors[side]->voltage(vex::voltageUnits::mV);
+        if (side == 0 && i < 2) {
+          // 保留 LM 与同侧 LF 的独立位置、电流读数，便于和 SDK 转速交叉比较。
+          values[side]->position_deg = motors[side]->position(vex::deg);
+          values[side]->current_A = motors[side]->current(vex::amp);
+          values[side]->diagnostic_valid = std::isfinite(values[side]->position_deg) &&
+                                           std::isfinite(values[side]->current_A);
+        }
+      }
+    }
+  }
+  return result;
+}
+
+bool ReadDrivePosition(double& left_deg, double& right_deg) {
+  double left_sum = 0.0;
+  double right_sum = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    vex::motor* left = *LeftDrive[i];
+    vex::motor* right = *RightDrive[i];
+    if (!left || !right || !left->installed() || !right->installed()) return false;
+    left_sum += left->position(vex::deg);
+    right_sum += right->position(vex::deg);
+  }
+  if (!std::isfinite(left_sum) || !std::isfinite(right_sum)) return false;
+  left_deg = left_sum / 4.0;
+  right_deg = right_sum / 4.0;
+  return true;
+}
+
+void SetDriveVelocity(double left_rpm, double right_rpm) {
+  // 每个电机使用 SDK 的转速控制。零速时主动刹车。
+  for (int i = 0; i < 4; ++i) {
+    vex::motor* left = *LeftDrive[i];
+    vex::motor* right = *RightDrive[i];
+    if (left_rpm == 0) left->stop(vex::brake);
+    else left->spin(vex::forward, left_rpm, vex::rpm);
+    if (right_rpm == 0) right->stop(vex::brake);
+    else right->spin(vex::forward, right_rpm, vex::rpm);
+  }
+}
+
+void StopDriveTurn() {
+  for (int i = 0; i < 4; ++i) {
+    vex::motor* left = *LeftDrive[i];
+    vex::motor* right = *RightDrive[i];
+    if (left) left->stop(vex::brake);
+    if (right) right->stop(vex::brake);
+  }
+}
+
+InertialState ReadInertial(double& rotation) {
+  if (!Inertial || !Inertial->installed()) {
+    inertial_calibration_started = false;
+    return InertialState::offline;
+  }
+  // 掉线或启动时未识别到传感器，需要重启程序完成静止校准。
+  if (!inertial_calibration_started) return InertialState::fault;
+  const double elapsed = InertialTimer.time(vex::msec);
+  if (Inertial->isCalibrating())
+    return elapsed < 8000 ? InertialState::calibrating : InertialState::fault;
+  if (elapsed < 500) return InertialState::calibrating;
+  rotation = Inertial->rotation(vex::deg);
+  return std::isfinite(rotation) ? InertialState::ready : InertialState::fault;
 }
 }  // 硬件接口命名空间

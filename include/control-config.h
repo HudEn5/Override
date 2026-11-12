@@ -1,6 +1,9 @@
 #pragma once
 
 #include "vex.h"
+#include "drive-control.h"
+#include "heading-control.h"
+#include "velocity-control.h"
 
 // 智能端口填写主控上的编号 1～21；三线端口填写 'A'～'H'。
 namespace config {
@@ -35,7 +38,7 @@ const bool PISTON_INITIAL_STATE = false;
 // 按键直接给电压，无目标角度、滤波、软件 PID 或电压渐变。
 // 两个值均填写正数，单位 mV；动作方向由 ARM_UP_DIRECTION 统一处理。
 constexpr int ARM_UP_VOLTAGE = 12000;
-constexpr int ARM_DOWN_VOLTAGE = 6000;
+constexpr int ARM_DOWN_VOLTAGE = 4000;
 // 夹爪仍使用 6 V 电压控制。
 const int CLAW_VOLTAGE = 6000;
 const int ARM_UP_DIRECTION = 1;      // 若上升方向相反，改为 -1
@@ -43,8 +46,20 @@ const int CLAW_CLOSE_DIRECTION = 1;  // 若夹紧方向相反，改为 -1
 const vex::brakeType ARM_BRAKE_MODE = vex::hold;
 const vex::brakeType CLAW_BRAKE_MODE = vex::hold;
 
-// 仅预留惯性传感器端口；当前差速手控不需要惯性传感器。
-const int INERTIAL_PORT = 0;
+// 惯导启动后静止校准，逆时针角度为正。
+const int INERTIAL_PORT = 4;
+// 驱动轮 2.75 英寸，单位换算为 mm。
+constexpr double DRIVE_WHEEL_DIAMETER_MM = 69.85;
+// 电机减速箱输出轴转数 / 轮子转数。直接连接为 1，外部再减速 3:1 为 3。
+constexpr double DRIVE_MOTOR_REVS_PER_WHEEL_REV = 36.0 / 30.0;
+constexpr double SQUARE_SIDE_MM = 500.0;
+constexpr double AUTO_DRIVE_RPM = 35.0;
+constexpr double AUTO_TURN_RPM = 30.0;
+constexpr double AUTO_TURN_FAST_RPM = 60.0;  // 大角度转向阶段最高转速
+constexpr double AUTO_TURN_SLOW_ANGLE = 25.0;  // 剩余角度小于该值时使用精调参数
+constexpr double AUTO_TURN_KP = 0.8;  // rpm/deg
+constexpr double AUTO_TURN_KD = 0.2;  // rpm/(deg/s)
+constexpr double AUTO_ANGLE_TOLERANCE = 0.8;  // deg
 
 // 左摇杆上下控制前后运动；右摇杆左右控制转向。
 const int YAxis = 3;
@@ -52,6 +67,31 @@ const int AngularAxis = 1;
 const int JOYSTICK_DEADBAND = 5;  // 单位为百分比；死区外重新线性映射输出
 const int MAX_VOLTAGE = 12000;
 const int UPDATE_TIME = 10;  // 缩短输入采样和输出更新的等待时间，实际周期可在屏幕查看。
+constexpr int TELEMETRY_INTERVAL_MS = 200;  // 回传最多 5 Hz；内部速度采样仍为约 50 Hz。
+constexpr bool ARM_SERIAL_LOG = false;  // 默认关闭 BMV 手臂日志，避免挤占无线带宽。
+constexpr int DRIVE_TEST_VOLTAGES[3] = {2000, 3000, 4000};  // 固定电压测试档位，单位 mV。
+constexpr int DRIVE_TEST_TIMEOUT_MS = 3000;  // 每次按住最多运行 3 秒，松开后才能重试。
+constexpr int FF_TEST_TARGETS[3] = {100, 150, 200};  // 电机输出轴 rpm。
+constexpr int TEST_MODE_HOLD_MS = 1000;  // 停车长按下方向键切换测试模式。
+// 前馈测试同时保持航向；停车不原地纠偏，重新起步仍沿用本轮最初方向。
+const drive::heading_config FF_HEADING = drive::heading_config();
+const drive::velocity_pid_config DRIVE_VELOCITY_PID = drive::velocity_pid_config();
+// 2026-11-12 根据当前硬件三轮 FF 验证更新：18 段、158 条运行后段样本。
+// 左右与前进/后退分别拟合，保留四台电机平均值，没有剔除 LM。
+// 已完成当前场地 100/150/200 rpm 的 SP 基础测试；跨场地一致性待验证。
+inline drive::feedforward_config TestFeedforward(double kS, double kV) {
+  drive::feedforward_config result;
+  result.kS = kS;
+  result.kV = kV;
+  result.kA = 0.0;
+  result.max_voltage = MAX_VOLTAGE;
+  result.calibrated = true;  // 允许测试控制器计算；不表示完成了独立实车验证。
+  return result;
+}
+const drive::feedforward_config FF_TEST_LEFT = TestFeedforward(372.573735, 17.900544);
+const drive::feedforward_config FF_TEST_RIGHT = TestFeedforward(408.162564, 16.537990);
+const drive::feedforward_config FF_TEST_LEFT_REVERSE = TestFeedforward(547.829766, 16.939618);
+const drive::feedforward_config FF_TEST_RIGHT_REVERSE = TestFeedforward(537.033135, 15.870378);
 const vex::brakeType BRAKE_MODE = vex::coast;
 
 enum class Button { R1, R2, L1, L2, A, B, X, Y, Up, Down, Left, Right };
@@ -61,4 +101,11 @@ const Button ArmDown = Button::R2;
 const Button ClawClose = Button::L1;
 const Button ClawOpen = Button::L2;
 const Button Toggle = Button::X;
+const Button TurnTest = Button::A;
+const Button SquareTest = Button::B;
+const Button Telemetry = Button::Y;  // 按一次开始回传，再按一次停止。
+const Button VoltageUp = Button::Up;
+const Button VoltageDown = Button::Down;
+const Button VoltageForward = Button::Right;
+const Button VoltageReverse = Button::Left;
 }  // 配置命名空间

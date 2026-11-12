@@ -1,5 +1,9 @@
 {
     "task.allowAutomaticTasks": "on",
+    "vexrobotics.vexcode.WebsocketServer.Enable": "Enable",
+    "vexrobotics.vexcode.WebsocketServer.HostAddress": "127.0.0.1",
+    "vexrobotics.vexcode.WebsocketServer.Port": 7071,
+    "vexrobotics.vexcode.General.EnableUserTerminal": "Enable",
     "C_Cpp.default.systemIncludePath": [
         "${config:vexrobotics.vexcode.Cpp.Sdk.Home}\\V5\\V5_20240802_15_00_00\\vexv5\\gcc\\include\\sys"
     ],
