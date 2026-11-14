@@ -11,13 +11,13 @@ struct Input {
   bool claw_close = false;
   bool claw_open = false;
   bool toggle = false;
-  bool turn_test = false;
-  bool square_test = false;
+  bool test_start = false;
+  bool test_cancel = false;
   bool telemetry = false;
-  bool voltage_up = false;
-  bool voltage_down = false;
-  bool voltage_forward = false;
-  bool voltage_reverse = false;
+  bool test_next = false;
+  bool test_previous = false;
+  bool test_positive = false;
+  bool test_negative = false;
 };
 
 struct Output {

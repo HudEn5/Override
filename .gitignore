@@ -2,9 +2,8 @@
 /bin/
 /compile_commands.json
 
-# 本地参考代码、备份和代码讲解不随程序发布。
+# 本地参考工程不随程序发布；当前代码结构说明保留在 docs/。
 /reference/
-/docs/Bartmoss代码分区说明.md
 
 # Each computer keeps its own role and SDK/toolchain locations.
 /.vex-device.json

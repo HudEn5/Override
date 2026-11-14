@@ -5,11 +5,9 @@
 #include "heading-control.h"
 #include "velocity-control.h"
 #include "drive-velocity.h"
-#include "trapezoid-motion.h"
-#include "drive-straight.h"
 #include <cmath>
 
-struct voltage_test_info {
+struct calibration_info {
   bool visible = false;
   bool running = false;
   int millivolts = 0;
@@ -20,51 +18,33 @@ struct voltage_test_info {
   drive::heading_info heading;
   bool speed_control = false;
   drive::velocity_loop_info velocity;
-  bool trapezoid = false;
-  drive::trapezoid_info motion;
   const char* status = "READY";
 };
 
 // 测试控制器只生成电压，不读写设备；可比较前馈与前馈加速度闭环。
-class voltage_test {
+class calibration_control {
  public:
-  voltage_test(const int (&voltages)[3], double timeout_ms) : timeout(timeout_ms) {
-    straight_settings.heading_enabled = false;
+  calibration_control(const int (&voltages)[3], double timeout_ms) : timeout(timeout_ms) {
     for (int i = 0; i < 3; ++i) levels[i] = voltages[i];
     info.millivolts = levels[0];
   }
 
-  const voltage_test_info& Info() const { return info; }
+  const calibration_info& Info() const { return info; }
 
   void ConfigureHeading(const drive::heading_config& config) {
     heading.Configure(config);
     info.heading_enabled = true;
-    straight_settings.heading = config;
-    straight_settings.heading_enabled = true;
-    Straight.Configure(straight_settings);
   }
 
   void ConfigureVelocityPID(const drive::velocity_pid_config& config) {
     velocity.ConfigurePID(config);
     velocity_configured = true;
-    straight_settings.pid = config;
-    Straight.Configure(straight_settings);
-  }
-
-  void ConfigureTrapezoid(const drive::trapezoid_config& config) {
-    straight_settings.motion = config;
-    straight_settings.retain_heading = true;
-    Straight.Configure(straight_settings);
-    trapezoid_configured = true;
   }
 
   void ConfigureFeedforward(const int (&rpm)[3], const drive::feedforward_config& left,
                             const drive::feedforward_config& right, double hold_ms) {
     for (int i = 0; i < 3; ++i) targets[i] = rpm[i];
     velocity.ConfigureForward(left, right);
-    straight_settings.left_forward = straight_settings.left_reverse = left;
-    straight_settings.right_forward = straight_settings.right_reverse = right;
-    Straight.Configure(straight_settings);
     mode_hold_ms = hold_ms;
     info.selected_rpm = targets[ff_level];
   }
@@ -73,39 +53,30 @@ class voltage_test {
   void ConfigureReverseFeedforward(const drive::feedforward_config& left,
                                    const drive::feedforward_config& right) {
     velocity.ConfigureReverse(left, right);
-    straight_settings.left_reverse = left; straight_settings.right_reverse = right;
-    Straight.Configure(straight_settings);
   }
 
   bool Update(const manual::Input& input, manual::Output& output, bool allowed,
               bool motors_online, double now_ms, bool stopped = true,
               bool inertial_ready = false, double angle = 0.0,
-              const drive::velocity_feedback& speed = drive::velocity_feedback(),
-              const drive::position_feedback& position = drive::position_feedback()) {
+              const drive::velocity_feedback& speed = drive::velocity_feedback()) {
     velocity.Observe(speed, now_ms);
-    drive::straight_feedback frame;
-    frame.velocity = speed; frame.position = position; frame.motors_online = motors_online;
-    frame.inertial_ready = inertial_ready; frame.heading_deg = angle; frame.stopped = stopped;
-    Straight.Observe(frame, allowed, now_ms);
-    bool beginning = false;
-    const bool up = previous_allowed && input.voltage_up && !previous_up;
-    const bool down = previous_allowed && input.voltage_down && !previous_down;
-    const bool down_released = previous_down && !input.voltage_down;
-    previous_up = input.voltage_up;
-    previous_down = input.voltage_down;
+    const bool up = previous_allowed && input.test_next && !previous_up;
+    const bool down = previous_allowed && input.test_previous && !previous_down;
+    const bool down_released = previous_down && !input.test_previous;
+    previous_up = input.test_next;
+    previous_down = input.test_previous;
     previous_allowed = allowed && motors_online;
     info.target_rpm = 0.0;
-    const bool held = input.voltage_forward || input.voltage_reverse;
-    if (held || input.voltage_up || input.voltage_down) info.visible = true;
+    const bool held = input.test_positive || input.test_negative;
+    if (held || input.test_next || input.test_previous) info.visible = true;
 
     // 摇杆立即接回正常驾驶；按 A/B 先退出电压测试。
-    if (output.L_voltage != 0 || output.R_voltage != 0 || input.turn_test || input.square_test) {
+    if (output.L_voltage != 0 || output.R_voltage != 0 || input.test_start || input.test_cancel) {
       info.visible = info.running = false;
       need_release = true;
       down_pending = false;
       ResetHeading();
       ResetSpeed();
-      CancelMotion();
       return false;
     }
     if (!allowed || !motors_online || !std::isfinite(now_ms)) {
@@ -114,7 +85,6 @@ class voltage_test {
       down_pending = false;
       ResetHeading();
       ResetSpeed();
-      CancelMotion();
       info.status = !allowed ? "DISABLED" : (!motors_online ? "MOTOR OFF" : "CLOCK ERR");
       if (!allowed || !info.visible) return false;
       output.L_voltage = output.R_voltage = 0;
@@ -131,46 +101,41 @@ class voltage_test {
       need_release = false;
       // 下键短按在松手时降档；停车长按只切换一次模式，不附带降档。
       if (down) {
-        down_pending = !input.voltage_up && stopped;
+        down_pending = !input.test_next && stopped;
         down_consumed = false;
         down_started_at = now_ms;
       }
-      if (input.voltage_down && down_pending) {
-        if (input.voltage_up || !stopped || now_ms < down_started_at) down_pending = false;
+      if (input.test_previous && down_pending) {
+        if (input.test_next || !stopped || now_ms < down_started_at) down_pending = false;
         else if (!down_consumed && now_ms - down_started_at >= mode_hold_ms) {
           if (info.feedforward && velocity_configured && !info.speed_control)
             info.speed_control = true;
-          else if (info.speed_control && trapezoid_configured && !info.trapezoid)
-            info.trapezoid = true;
           else {
             info.feedforward = !info.feedforward;
             info.speed_control = false;
-            info.trapezoid = false;
           }
           ResetHeading();  // 主动退出/重进前馈模式时才建立新一轮参考。
           ResetSpeed();
-          CancelMotion();
-          Straight.Reset(); info.motion = Straight.Info().motion;
           down_consumed = true;
         }
       }
       int& selected_level = info.feedforward ? ff_level : level;
-      if (up && !input.voltage_down && selected_level < 2) ++selected_level;
+      if (up && !input.test_previous && selected_level < 2) ++selected_level;
       if (down_released) {
-        if (down_pending && !down_consumed && !input.voltage_up && selected_level > 0)
+        if (down_pending && !down_consumed && !input.test_next && selected_level > 0)
           --selected_level;
         down_pending = false;
       }
       info.millivolts = levels[level];
       info.selected_rpm = targets[ff_level];
-      info.status = MotionStatus("READY");
-    } else if (need_release || input.voltage_forward == input.voltage_reverse) {
+      info.status = "READY";
+    } else if (need_release || input.test_positive == input.test_negative) {
       info.running = false;
       need_release = true;
-      info.status = MotionStatus("RELEASE");
+      info.status = "RELEASE";
     } else {
       down_pending = false;  // 运行中按下选择键不会累积切换或降档手势。
-      const int requested_direction = input.voltage_forward ? 1 : -1;
+      const int requested_direction = input.test_positive ? 1 : -1;
       if (info.running && requested_direction != direction) {
         // 换向必须先松开运行键，不能在持续输出期间直接反向。
         info.running = false;
@@ -181,9 +146,8 @@ class voltage_test {
           direction = requested_direction;
           started_at = now_ms;
           info.running = true;
-          beginning = true;
         }
-        if (!info.trapezoid && (now_ms < started_at || now_ms - started_at >= timeout)) {
+        if (now_ms < started_at || now_ms - started_at >= timeout) {
           info.running = false;
           need_release = true;
           info.status = "TIMEOUT";
@@ -195,25 +159,6 @@ class voltage_test {
 
     if (!info.visible) return false;
     output.L_voltage = output.R_voltage = 0;
-    if (info.trapezoid) {
-      if (info.running) {
-        if (beginning) {
-          if (!std::isfinite(straight_settings.motion.distance_mm) || straight_settings.motion.distance_mm <= 0)
-            Straight.Reject("TP CONFIG");
-          else Straight.StartDriveStraight(direction * straight_settings.motion.distance_mm, info.selected_rpm);
-        }
-        Straight.UpdateDriveStraight();
-        const drive::straight_info& value = Straight.Info();
-        info.running = value.state == drive::straight_state::running;
-        info.status = value.status;
-        if (!info.running) need_release = true;
-      } else Straight.CancelDriveStraight();
-      const drive::straight_info& value = Straight.Info();
-      info.motion = value.motion; info.heading = value.heading; info.velocity = value.velocity;
-      info.target_rpm = info.running ? value.motion.target_rpm : 0;
-      output.L_voltage = value.left_mV; output.R_voltage = value.right_mV;
-      return true;
-    }
     const double target = direction * info.selected_rpm;
     if (info.running && info.feedforward) {
       if (!velocity.Feedforward(target, target, output.L_voltage, output.R_voltage)) {
@@ -249,22 +194,16 @@ class voltage_test {
         ResetSpeed();
       }
     } else ResetSpeed();
-    if (!info.running) CancelMotion();
     return true;
   }
 
  private:
-  const char* MotionStatus(const char* otherwise) const {
-    return info.trapezoid && (Straight.Info().state == drive::straight_state::done ||
-        Straight.Info().state == drive::straight_state::error) ? Straight.Info().status : otherwise;
-  }
   void ResetHeading() {
-    heading.Reset(); Straight.ResetReference(); info.heading = heading.Info();
+    heading.Reset(); info.heading = heading.Info();
   }
   void ResetSpeed() {
     velocity.Reset(); info.velocity = velocity.Info();
   }
-  void CancelMotion() { Straight.CancelDriveStraight(); info.motion = Straight.Info().motion; }
   bool ApplySpeed(const drive::velocity_feedback& speed, double now,
                   manual::Output& output) {
     // 外环的差速电压按当前运动方向的 kV 换算成两侧目标，内环跟踪它。
@@ -277,9 +216,6 @@ class voltage_test {
     return valid;
   }
   drive::velocity_control velocity;
-  drive::straight_controller Straight;
-  drive::straight_config straight_settings;
-  bool trapezoid_configured = false;
   bool velocity_configured = false;
   drive::heading_hold heading;
   int levels[3];
@@ -297,5 +233,5 @@ class voltage_test {
   bool previous_up = false;
   bool previous_down = false;
   bool previous_allowed = false;
-  voltage_test_info info;
+  calibration_info info;
 };

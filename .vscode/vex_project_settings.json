@@ -5,7 +5,7 @@
 	},
 	"project": {
 		"name": "Bartmoss",
-		"description": "2026-2027 Bartmoss v1.2.0-control",
+		"description": "2026-2027 Bartmoss v1.6.0-tests",
 		"creationDate": "2026/11/02 00:00:00",
 		"platform": "V5",
 		"language": "cpp",

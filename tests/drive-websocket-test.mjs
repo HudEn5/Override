@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER } from '../scripts/monitor-drive-websocket.mjs';
+import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, CORNER_HEADER } from '../scripts/monitor-drive-websocket.mjs';
 
 // 协议契约测试：模拟串口跨消息分片，不能将半行误写成完整样本。
 const received = [];
@@ -72,12 +72,34 @@ parser.push('x'.repeat(65537));
 assert.equal(parser.pending, '');
 // 已有真实旧版日志也必须完整兼容，不改动原文件。
 for (const [name, count] of [['1794412458993', 68], ['1794413751103', 119]]) {
-  const url = new URL(`../build/drive-websocket-${name}.log`, import.meta.url);
-  if (!fs.existsSync(url)) continue;
+  const url = ['../build/data/history/', '../build/data/', '../build/']
+    .map(directory => new URL(`${directory}drive-websocket-${name}.log`, import.meta.url))
+    .find(candidate => fs.existsSync(candidate));
+  if (!url) continue;
   let n = 0;
   const old = new DriveLines(row => { n++; assert.equal(row.length, 29); assert.equal(row[27], '-1'); });
   old.push(fs.readFileSync(url, 'utf8'));
   assert.equal(n, count);
   assert.equal(old.malformed, 0);
 }
-console.log('WebSocket protocol checks passed: DS2, DLM, DHD, DVL, DTP, DSQ, legacy DSV, fragments and invalid rows.');
+const turnRows = [];
+const turnParser = new DriveLines(noProfile, noProfile, noProfile, noProfile, noProfile, noProfile,
+  row => turnRows.push(row));
+const turn = ['11', '4020', '1000', '45', '90', '45', '30', '20', '-900', '920', '1'];
+const turnStream = `#web#DTN,${turn.join(',')}\nDTN,broken\nDTN,${[...turn.slice(0, 10), 'NaN'].join(',')}\n`;
+for (let i = 0; i < turnStream.length; i += 3) turnParser.push(turnStream.slice(i, i + 3));
+assert.equal(TURN_HEADER.split(',').length, 11);
+assert.deepEqual(turnRows, [turn]);
+assert.equal(turnParser.turns, 1);
+assert.equal(turnParser.malformed, 2);
+const cornerRows = [];
+const cornerParser = new DriveLines(noProfile, noProfile, noProfile, noProfile, noProfile, noProfile, noProfile,
+  row => cornerRows.push(row));
+const corner = ['11','4020','2000','2','1','600','900','10','11','1','25','50','30','70','1200','1800'];
+const cornerStream = `#web#DCR,${corner.join(',')}\nDCR,broken\nDCR,${[...corner.slice(0,15),'NaN'].join(',')}\n`;
+for (let i = 0; i < cornerStream.length; i += 3) cornerParser.push(cornerStream.slice(i, i + 3));
+assert.equal(CORNER_HEADER.split(',').length, 16);
+assert.deepEqual(cornerRows, [corner]);
+assert.equal(cornerParser.corners, 1);
+assert.equal(cornerParser.malformed, 2);
+console.log('WebSocket protocol checks passed: DS2, DLM, DHD, DVL, DTP, DSQ, DTN, DCR, legacy DSV, fragments and invalid rows.');

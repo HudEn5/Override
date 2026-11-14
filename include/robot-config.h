@@ -29,8 +29,6 @@ void Apply(const manual::Output& output, bool manual_drive = true, bool brake_dr
 void GetDriveMotorCount(int& left_count, int& right_count);
 drive::feedback ReadDriveFeedback();
 bool ReadDrivePosition(double& left_deg, double& right_deg);
-void SetDriveVelocity(double left_rpm, double right_rpm);
-void StopDriveTurn();
 enum class InertialState { offline, calibrating, ready, fault };
 InertialState ReadInertial(double& rotation);
 }  // 硬件接口命名空间

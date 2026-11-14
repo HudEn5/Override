@@ -6,21 +6,29 @@
 #include "velocity-control.h"
 #include "trapezoid-motion.h"
 #include "drive-straight.h"
+#include "drive-turn.h"
+#include "drive-corner.h"
 #include "program-mode.h"
 
 // 智能端口填写主控上的编号 1～21；三线端口填写 'A'～'H'。
 namespace config {
-const char PROGRAM_VERSION[] = "1.2.0-control";
+const char PROGRAM_VERSION[] = "1.6.0-tests";
 const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
-// 测试模式保留原有按键；比赛模式仅在场控已启用自动阶段执行 src/route.cpp。
+// 默认日常测试；标定与比赛分别通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION
-#define BARTMOSS_COMPETITION 0  // 0 测试；1 比赛。脚本也可用 -Mode 明确指定并分目录编译。
+#define BARTMOSS_COMPETITION 0
 #endif
-#if BARTMOSS_COMPETITION != 0 && BARTMOSS_COMPETITION != 1
-#error BARTMOSS_COMPETITION must be 0 or 1
+#ifndef BARTMOSS_CALIBRATION
+#define BARTMOSS_CALIBRATION 0
 #endif
-constexpr runtime::program_mode PROGRAM_MODE = BARTMOSS_COMPETITION ?
-    runtime::program_mode::competition : runtime::program_mode::test;
+#if (BARTMOSS_COMPETITION != 0 && BARTMOSS_COMPETITION != 1) || (BARTMOSS_CALIBRATION != 0 && BARTMOSS_CALIBRATION != 1)
+#error Invalid Bartmoss environment
+#endif
+#if BARTMOSS_COMPETITION && BARTMOSS_CALIBRATION
+#error Competition and calibration cannot be enabled together
+#endif
+constexpr runtime::program_mode PROGRAM_MODE = BARTMOSS_COMPETITION ? runtime::program_mode::competition :
+    BARTMOSS_CALIBRATION ? runtime::program_mode::calibration : runtime::program_mode::test;
 
 struct Motor {
   int port;
@@ -64,12 +72,7 @@ const int INERTIAL_PORT = 4;
 constexpr double DRIVE_WHEEL_DIAMETER_MM = 69.85;
 // 电机减速箱输出轴转数 / 轮子转数。直接连接为 1，外部再减速 3:1 为 3。
 constexpr double DRIVE_MOTOR_REVS_PER_WHEEL_REV = 36.0 / 30.0;
-constexpr double SQUARE_SIDE_MM = 500.0;
-constexpr double AUTO_DRIVE_RPM = 35.0;
-constexpr double AUTO_TURN_RPM = 30.0;
-constexpr double AUTO_TURN_FAST_RPM = 60.0;  // 大角度转向阶段最高转速
-constexpr double AUTO_TURN_SLOW_ANGLE = 25.0;  // 剩余角度小于该值时使用精调参数
-constexpr double AUTO_TURN_KP = 0.8;  // rpm/deg
+constexpr double AUTO_TURN_KP = 1.6;  // rpm/deg；转向专用，直行航向增益不变。
 constexpr double AUTO_TURN_KD = 0.2;  // rpm/(deg/s)
 constexpr double AUTO_ANGLE_TOLERANCE = 0.8;  // deg
 
@@ -81,25 +84,18 @@ const int MAX_VOLTAGE = 12000;
 const int UPDATE_TIME = 10;  // 缩短输入采样和输出更新的等待时间，实际周期可在屏幕查看。
 constexpr int TELEMETRY_INTERVAL_MS = 200;  // 回传最多 5 Hz；内部速度采样仍为约 50 Hz。
 constexpr bool ARM_SERIAL_LOG = false;  // 默认关闭 BMV 手臂日志，避免挤占无线带宽。
-constexpr int DRIVE_TEST_VOLTAGES[3] = {2000, 3000, 4000};  // 固定电压测试档位，单位 mV。
-constexpr int DRIVE_TEST_TIMEOUT_MS = 3000;  // VTEST/FH/SP 最多 3 秒；TP 按规划时长加余量。
-constexpr int FF_TEST_TARGETS[3] = {100, 150, 200};  // 电机输出轴 rpm。
-constexpr int TEST_MODE_HOLD_MS = 1000;  // 停车长按下方向键切换测试模式。
-// 前馈测试同时保持航向；停车不原地纠偏，重新起步仍沿用本轮最初方向。
-const drive::heading_config FF_HEADING = drive::heading_config();
+const drive::heading_config DRIVE_HEADING = drive::heading_config();
 const drive::velocity_pid_config DRIVE_VELOCITY_PID = drive::velocity_pid_config();
-inline drive::trapezoid_config TrapezoidTest() {
+inline drive::trapezoid_config StraightMotion() {
   drive::trapezoid_config result;
   result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
   result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
-  result.distance_mm = SQUARE_SIDE_MM;  // TP 每段前进/后退 500 mm。
   return result;
 }
-const drive::trapezoid_config TP_TEST = TrapezoidTest();
 // 2026-11-12 根据当前硬件三轮 FF 验证更新：18 段、158 条运行后段样本。
 // 左右与前进/后退分别拟合，保留四台电机平均值，没有剔除 LM。
 // 已完成当前场地 100/150/200 rpm 的 SP 基础测试；跨场地一致性待验证。
-inline drive::feedforward_config TestFeedforward(double kS, double kV) {
+inline drive::feedforward_config Feedforward(double kS, double kV) {
   drive::feedforward_config result;
   result.kS = kS;
   result.kV = kV;
@@ -108,17 +104,61 @@ inline drive::feedforward_config TestFeedforward(double kS, double kV) {
   result.calibrated = true;  // 允许测试控制器计算；不表示完成了独立实车验证。
   return result;
 }
-const drive::feedforward_config FF_TEST_LEFT = TestFeedforward(372.573735, 17.900544);
-const drive::feedforward_config FF_TEST_RIGHT = TestFeedforward(408.162564, 16.537990);
-const drive::feedforward_config FF_TEST_LEFT_REVERSE = TestFeedforward(547.829766, 16.939618);
-const drive::feedforward_config FF_TEST_RIGHT_REVERSE = TestFeedforward(537.033135, 15.870378);
+const drive::feedforward_config FF_LEFT = Feedforward(372.573735, 17.900544);
+const drive::feedforward_config FF_RIGHT = Feedforward(408.162564, 16.537990);
+const drive::feedforward_config FF_LEFT_REVERSE = Feedforward(547.829766, 16.939618);
+const drive::feedforward_config FF_RIGHT_REVERSE = Feedforward(537.033135, 15.870378);
 inline drive::straight_config StraightControl() {
   drive::straight_config result;
-  result.motion = TP_TEST;
-  result.heading = FF_HEADING;
+  result.motion = StraightMotion();
+  result.heading = DRIVE_HEADING;
   result.pid = DRIVE_VELOCITY_PID;
-  result.left_forward = FF_TEST_LEFT; result.right_forward = FF_TEST_RIGHT;
-  result.left_reverse = FF_TEST_LEFT_REVERSE; result.right_reverse = FF_TEST_RIGHT_REVERSE;
+  result.left_forward = FF_LEFT; result.right_forward = FF_RIGHT;
+  result.left_reverse = FF_LEFT_REVERSE; result.right_reverse = FF_RIGHT_REVERSE;
+  return result;
+}
+inline drive::turn_config TurnControl() {
+  drive::turn_config result;
+  result.kP = AUTO_TURN_KP; result.kD = AUTO_TURN_KD;
+  result.angle_tolerance_deg = AUTO_ANGLE_TOLERANCE;
+  result.pid = DRIVE_VELOCITY_PID;
+  // 四轮/侧原地转动的阻力高于直行；仅转向放宽补偿并加快积分。
+  result.pid.kP = 20; result.pid.kI = 20;
+  result.pid.max_correction = 2000; result.pid.max_integral = 1200;
+  result.correction_fraction = 3.0;
+  result.acceleration_rpm_s = 240;
+  result.minimum_settle_rpm = 18;  // 尾段加快，最后 6° 内渐变回 12 rpm。
+  result.minimum_finish_rpm = 12;
+  result.minimum_rate_deg_s = 16;
+  result.left_forward = FF_LEFT; result.right_forward = FF_RIGHT;
+  result.left_reverse = FF_LEFT_REVERSE; result.right_reverse = FF_RIGHT_REVERSE;
+  return result;
+}
+inline drive::corner_config CornerControl() {
+  drive::corner_config result;
+  result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
+  result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
+  result.track_width_mm = 325;  // 用户实测左右驱动轮接地中心线间距。
+  result.radius_mm = 250;      // 参考曲率峰值对应半径；曲率渐入渐出。
+  result.corner_rpm = 140;  // 弯内上限；实际按航向跟随情况降速，不能当作实车已验证速度。
+  result.corner_floor_rpm = 100;  // 入弯偏好及反馈降速下限；预测限速可以低于此值。
+  result.prediction_enabled = true;
+  result.prediction_wheel_acceleration_rpm_s = 180;  // 预测用目标变化上限，尚非实测机械极限。
+  result.prediction_wheel_deceleration_rpm_s = 120;
+  result.prediction_margin = 0.85;  // 留出 15% 供航向修正和模型偏差使用。
+  result.corner_acceleration_rpm_s = 60;
+  result.entry_braking_delay_ms = 200;
+  result.acceleration_rpm_s = 180;
+  // 连续圆角终点容差按用户接受标准设为 1.5°；原地转向仍为 0.8°。
+  result.angle_tolerance_deg = 1.5;
+  result.exit_angle_tolerance_deg = 1.5;
+  result.exit_rate_tolerance_deg_s = 4;
+  result.finish_min_rpm = 12;  // 最末端保留已验证的低速，较远的终点接近段加快。
+  result.finish_max_rpm = 30;
+  result.finish_kP = 0.6;
+  result.pid = TurnControl().pid;  // 整条连续路线使用同一个速度环，不在切点重置。
+  result.left_forward = FF_LEFT; result.right_forward = FF_RIGHT;
+  result.left_reverse = FF_LEFT_REVERSE; result.right_reverse = FF_RIGHT_REVERSE;
   return result;
 }
 const vex::brakeType BRAKE_MODE = vex::coast;
@@ -130,11 +170,11 @@ const Button ArmDown = Button::R2;
 const Button ClawClose = Button::L1;
 const Button ClawOpen = Button::L2;
 const Button Toggle = Button::X;
-const Button TurnTest = Button::A;
-const Button SquareTest = Button::B;
+const Button TestStart = Button::A;
+const Button TestCancel = Button::B;
 const Button Telemetry = Button::Y;  // 按一次开始回传，再按一次停止。
-const Button VoltageUp = Button::Up;
-const Button VoltageDown = Button::Down;
-const Button VoltageForward = Button::Right;
-const Button VoltageReverse = Button::Left;
+const Button TestNext = Button::Up;
+const Button TestPrevious = Button::Down;
+const Button TestPositive = Button::Right;
+const Button TestNegative = Button::Left;
 }  // 配置命名空间

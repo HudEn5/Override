@@ -1,4 +1,4 @@
-#include "voltage-test.h"
+#include "calibration-control.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -13,7 +13,7 @@ drive::feedforward_config Model() {
 struct fixture {
   int volts[3] = {2000, 3000, 4000};
   int targets[3] = {100, 150, 200};
-  voltage_test test;
+  calibration_control test;
   manual::Input input;
   manual::Output output;
   drive::velocity_feedback speed;
@@ -39,8 +39,8 @@ struct fixture {
   }
   void Switch() {
     input = manual::Input(); Step(now + 10);
-    input.voltage_down = true; Step(now + 10); Step(now + 1000);
-    input.voltage_down = false; Step(now + 10);
+    input.test_previous = true; Step(now + 10); Step(now + 1000);
+    input.test_previous = false; Step(now + 10);
   }
 };
 
@@ -71,13 +71,13 @@ int main() {
 
   fixture f;
   assert(f.test.Info().feedforward && !f.test.Info().speed_control);
-  f.input.voltage_forward = true; f.Step(f.now + 10);
+  f.input.test_positive = true; f.Step(f.now + 10);
   assert(f.output.L_voltage == 2000); // FH 仍是原前馈。
-  f.input.voltage_forward = false; f.Step(f.now + 10);
+  f.input.test_positive = false; f.Step(f.now + 10);
   f.Switch();
   assert(f.test.Info().speed_control && f.test.Info().feedforward);
   f.speed.left_rpm = 90; f.speed.right_rpm = 110;
-  f.input.voltage_forward = true; f.Step(f.now + 10);
+  f.input.test_positive = true; f.Step(f.now + 10);
   assert(f.output.L_voltage == 2060 && f.output.R_voltage == 1940);
   const double correction = f.test.Info().velocity.left_correction;
   f.Step(f.now + 10, false);
@@ -88,15 +88,15 @@ int main() {
   assert(f.output.L_voltage == 0 && f.output.R_voltage == 0 && !f.test.Info().running);
   assert(std::strcmp(f.test.Info().status, "SPEED ERR") == 0);
   f.Step(f.now + 10); assert(f.output.L_voltage == 0); // 恢复新数据也需松开。
-  f.input.voltage_forward = false; f.Step(f.now + 10);
+  f.input.test_positive = false; f.Step(f.now + 10);
   assert(!f.test.Info().velocity.active);
   f.speed.left_rpm = -90; f.speed.right_rpm = -110;
-  f.input.voltage_reverse = true; f.Step(f.now + 10);
+  f.input.test_negative = true; f.Step(f.now + 10);
   assert(f.output.L_voltage == -2060 && f.output.R_voltage == -1940);
-  f.input.voltage_reverse = false; f.Step(f.now + 10);
+  f.input.test_negative = false; f.Step(f.now + 10);
   f.heading = 2;
   f.speed.left_rpm = -90; f.speed.right_rpm = -110;
-  f.input.voltage_reverse = true; f.Step(f.now + 10);
+  f.input.test_negative = true; f.Step(f.now + 10);
   // 偏左 -> 顺时针修正；外环差速目标为左 -90、右 -110，内环不能抵消它。
   assert(f.test.Info().velocity.left_target == -90 && f.test.Info().velocity.right_target == -110);
   assert(f.output.L_voltage == -1840 && f.output.R_voltage == -2160);
@@ -104,19 +104,19 @@ int main() {
   assert(f.output.L_voltage == 0 && !f.test.Info().running);
   f.speed.valid = true; f.Step(f.now + 10);
   assert(f.output.L_voltage == 0);
-  f.input.voltage_reverse = false; f.Step(f.now + 10);
-  f.input.voltage_forward = true; f.Step(f.now + 10);
+  f.input.test_negative = false; f.Step(f.now + 10);
+  f.input.test_positive = true; f.Step(f.now + 10);
   f.Step(f.now + 3000);
   assert(f.output.L_voltage == 0 && std::strcmp(f.test.Info().status, "TIMEOUT") == 0);
-  f.input.voltage_forward = false; f.Step(f.now + 10);
+  f.input.test_positive = false; f.Step(f.now + 10);
   f.Switch(); assert(!f.test.Info().feedforward && !f.test.Info().speed_control);
   f.Switch(); f.Switch();
-  f.input.voltage_forward = true; f.Step(f.now + 10);
+  f.input.test_positive = true; f.Step(f.now + 10);
   f.Step(f.now + 10, true, true);
   assert(!f.test.Info().velocity.active && f.output.L_voltage == 1000);
   f.Step(f.now + 10); assert(f.output.L_voltage == 0);
-  f.input.voltage_forward = false; f.Step(f.now + 10);
-  f.input.voltage_reverse = true; f.Step(f.now + 10);
+  f.input.test_positive = false; f.Step(f.now + 10);
+  f.input.test_negative = true; f.Step(f.now + 10);
   f.online = false; f.Step(f.now + 10);
   assert(f.output.L_voltage == 0 && !f.test.Info().velocity.active);
 

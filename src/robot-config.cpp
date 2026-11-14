@@ -155,13 +155,13 @@ manual::Input ReadInput() {
   input.claw_close = Pressed(config::ClawClose);
   input.claw_open = Pressed(config::ClawOpen);
   input.toggle = Pressed(config::Toggle);
-  input.turn_test = Pressed(config::TurnTest);
-  input.square_test = Pressed(config::SquareTest);
+  input.test_start = Pressed(config::TestStart);
+  input.test_cancel = Pressed(config::TestCancel);
   input.telemetry = Pressed(config::Telemetry);
-  input.voltage_up = Pressed(config::VoltageUp);
-  input.voltage_down = Pressed(config::VoltageDown);
-  input.voltage_forward = Pressed(config::VoltageForward);
-  input.voltage_reverse = Pressed(config::VoltageReverse);
+  input.test_next = Pressed(config::TestNext);
+  input.test_previous = Pressed(config::TestPrevious);
+  input.test_positive = Pressed(config::TestPositive);
+  input.test_negative = Pressed(config::TestNegative);
   return input;
 }
 
@@ -241,27 +241,6 @@ bool ReadDrivePosition(double& left_deg, double& right_deg) {
   left_deg = left_sum / 4.0;
   right_deg = right_sum / 4.0;
   return true;
-}
-
-void SetDriveVelocity(double left_rpm, double right_rpm) {
-  // 每个电机使用 SDK 的转速控制。零速时主动刹车。
-  for (int i = 0; i < 4; ++i) {
-    vex::motor* left = *LeftDrive[i];
-    vex::motor* right = *RightDrive[i];
-    if (left_rpm == 0) left->stop(vex::brake);
-    else left->spin(vex::forward, left_rpm, vex::rpm);
-    if (right_rpm == 0) right->stop(vex::brake);
-    else right->spin(vex::forward, right_rpm, vex::rpm);
-  }
-}
-
-void StopDriveTurn() {
-  for (int i = 0; i < 4; ++i) {
-    vex::motor* left = *LeftDrive[i];
-    vex::motor* right = *RightDrive[i];
-    if (left) left->stop(vex::brake);
-    if (right) right->stop(vex::brake);
-  }
 }
 
 InertialState ReadInertial(double& rotation) {

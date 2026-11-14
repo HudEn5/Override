@@ -1,11 +1,12 @@
 #pragma once
 
 namespace runtime {
-enum class program_mode { test, competition };
+enum class program_mode { test, competition, calibration };
 enum class competition_stage { none, autonomous, driver };
 struct permissions {
   bool manual = false;
   bool tests = false;
+  bool calibration = false;
   bool autonomous = false;
   bool telemetry = false;
 };
@@ -18,7 +19,8 @@ inline permissions Permissions(program_mode mode, bool configured, bool field_co
   result.manual = configured && controller && (!field_connected ||
       (enabled && driver && !autonomous && requested == competition_stage::driver));
   result.tests = configured && controller && !field_connected && mode == program_mode::test;
-  result.telemetry = controller && !field_connected && mode == program_mode::test;
+  result.calibration = configured && controller && !field_connected && mode == program_mode::calibration;
+  result.telemetry = controller && !field_connected && mode != program_mode::competition;
   result.autonomous = configured && field_connected && enabled && autonomous && !driver &&
                       mode == program_mode::competition && requested == competition_stage::autonomous;
   return result;

@@ -13,7 +13,7 @@ struct sample {
   int right_command_mV = 0;
   bool command_valid = false;
   bool enabled = false;
-  int mode = 0;  // 0 手控，1 电压，2 旧前馈，3 A/B，4 FH，5 SP，6 TP，7 比赛自动。
+  int mode = 0;  // 0 手控，1 标定电压，2 旧前馈，3 转向，4 FH，5 SP，6 直行，7 比赛自动，8 圆角。
   double target_rpm = 0.0;
   double LM_deg = 0.0;
   double LM_current_A = 0.0;

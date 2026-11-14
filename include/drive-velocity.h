@@ -46,7 +46,8 @@ class velocity_control {
   }
   // 基础电压可以已包含航向修正；对应的目标转速必须同样包含差速修正。
   bool ApplyPID(double left_target, double right_target, const velocity_feedback& speed,
-                double now, int& left, int& right) {
+                double now, int& left, int& right, double correction_fraction = 0.5) {
+    if (!std::isfinite(correction_fraction) || correction_fraction <= 0) return false;
     if (!Fresh(now)) return false;
     if (!info.active || speed.sequence != applied_sequence) {
       const double dt = info.active ? (speed.time_ms - info.time_ms) / 1000.0 : 0;
@@ -56,9 +57,9 @@ class velocity_control {
       const double l = std::fabs(static_cast<double>(left));
       const double r = std::fabs(static_cast<double>(right));
       if (!left_pid.Update(left_target, speed.left_rpm, dt,
-              std::min(l * 0.5, 12000.0 - l), info.left_correction) ||
+              std::min(l * correction_fraction, 12000.0 - l), info.left_correction) ||
           !right_pid.Update(right_target, speed.right_rpm, dt,
-              std::min(r * 0.5, 12000.0 - r), info.right_correction)) return false;
+              std::min(r * correction_fraction, 12000.0 - r), info.right_correction)) return false;
       info.time_ms = speed.time_ms; info.active = true; applied_sequence = speed.sequence;
     }
     left = static_cast<int>(std::lround(std::max(-12000.0,
