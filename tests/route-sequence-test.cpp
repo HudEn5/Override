@@ -65,6 +65,12 @@ int main() {
       if (wait_begin < 0) wait_begin = f.now;
     } else if (wait_begin >= 0 && wait_end < 0) wait_end = f.now;
   }
+  if (!(f.Program.Info().finished && f.Program.Info().result == 2 && f.Program.Info().step == 7)) {
+    const auto& a=f.Program.Info();
+    std::printf("Route failed: step %u result %d status %s turn %s error %.3f corner %s error %.3f distance %.3f\n",
+        a.step,a.result,a.status,a.turn.status,a.turn.error_deg,a.corner.status,a.corner.error_deg,a.drive.motion.remaining_mm);
+    std::fflush(stdout);
+  }
   assert(f.Program.Info().finished && f.Program.Info().result == 2 && f.Program.Info().step == 7);
   assert(std::fabs(f.frame.heading_deg - 90) <= 1.5 && wait_end - wait_begin == 120);
   const auto run = f.Program.Info().run;

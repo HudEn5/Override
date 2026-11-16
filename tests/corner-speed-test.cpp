@@ -43,10 +43,11 @@ c.left_reverse.calibrated=true;
 c.right_reverse.kS=537.033135;
 c.right_reverse.kV=15.870378;
 c.right_reverse.calibrated=true; return c;}
-Run Sim(double maximum,double curve,double angle,double width,double drag,double la,double ra,bool prediction=false,double floor=130,bool fast=false){
+Run Sim(double maximum,double curve,double angle,double width,double drag,double la,double ra,bool prediction=false,double floor=130,bool fast=false,bool experiment=false){
  auto cfg=Config();cfg.corner_rpm=curve;cfg.prediction_enabled=prediction;
  if(prediction) cfg.corner_floor_rpm=floor;
  if(fast) cfg=config::HighSpeedCornerControl(cfg);
+ if(experiment) cfg=config::RouteCornerControl(cfg);
  drive::corner_controller c;c.Configure(cfg);
  drive::straight_feedback f;f.velocity.valid=f.position.valid=f.motors_online=f.inertial_ready=f.stopped=true;
  f.velocity.sequence=1;c.Observe(f,true,0);if(!c.StartDriveCorner(500,angle,500,maximum))return {false,0,0,0,c.Info().status};
@@ -70,6 +71,20 @@ bool Sweep(double cap,double curve,Run& worst){worst={true,0,0,0,"DONE"};for(dou
  auto r=Sim(cap,curve,a,w,d,response==1?.1:.25,response==2?.1:(response==1?.35:.25));
  if(!r.pass){worst=r;return false;}worst.time=std::max(worst.time,r.time);worst.peak=std::max(worst.peak,r.peak);worst.err=std::max(std::fabs(worst.err),std::fabs(r.err));}return true;}
 int main(){
+ unsigned int experimental_runs=0;double experimental_time=0,baseline_time=0,experimental_error=0;
+ for(double angle:{-120.,-90.,-30.,30.,90.,120.})for(double width:{.9,1.,1.1})for(double drag:{0.,600.})for(int response=0;response<3;++response){
+  const double la=response==1?.1:.25,ra=response==2?.1:(response==1?.35:.25);
+  const auto before=Sim(330,180,angle,width,drag,la,ra,true,130,true);
+  const auto after=Sim(config::ROUTE_DRIVE_RPM,180,angle,width,drag,la,ra,true,130,true,true);
+  if(!after.pass)std::printf("Experimental corner failed: angle %.0f width %.1f drag %.0f response %d %s error %.3f time %.0f\n",angle,width,drag,response,after.reason,after.err,after.time);
+  std::fflush(stdout);assert(before.pass && after.pass && std::fabs(after.err)<=1.5);
+  baseline_time+=before.time;experimental_time+=after.time;experimental_error=std::max(experimental_error,std::fabs(after.err));++experimental_runs;
+ }
+ const auto exp_before=Sim(330,180,90,1,0,.25,.25,true,130,true);
+ const auto exp_after=Sim(config::ROUTE_DRIVE_RPM,180,90,1,0,.25,.25,true,130,true,true);
+ std::printf("Experimental corner: %u paired cases, mean %.0f -> %.0f ms, nominal 90 %.0f -> %.0f ms, max endpoint %.3f deg.\n",
+     experimental_runs,baseline_time/experimental_runs,experimental_time/experimental_runs,exp_before.time,exp_after.time,experimental_error);
+ if(config::EXPERIMENTAL_FAST_ROUTE) assert(exp_after.time<exp_before.time);
  // 同一套当前高速参数覆盖用户常用角度、各速度上限及左右响应差异。
  unsigned int angle_runs=0,angle_failures=0;
  for(double degrees:{30.,90.,120.}) {

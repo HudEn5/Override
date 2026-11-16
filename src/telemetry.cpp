@@ -26,6 +26,9 @@ void PrintMotion(unsigned int sequence, const test_info& test) {
     printf("DTN,%u,%.1f,%.1f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d\n", sequence,
            t.time_ms, t.elapsed_ms, t.angle_deg, t.target_deg, t.error_deg, t.rate_deg_s,
            t.target_rpm, t.left_mV, t.right_mV, static_cast<int>(t.state));
+    if (t.profiled) printf("DTA,%u,%.1f,%.1f,%.2f,%.2f,%.1f,%.2f,%d,%.2f\n", sequence,
+        t.time_ms, t.elapsed_ms, t.reference_deg, t.reference_rate_deg_s, t.profile_duration_ms,
+        t.profile_peak_deg_s, t.profile_phase, t.reference_deg - t.angle_deg);
     PrintVelocity(sequence, t.velocity);
   } else {
     const auto& c = test.corner;

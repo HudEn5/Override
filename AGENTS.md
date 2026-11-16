@@ -1,6 +1,12 @@
 # Override 项目交接
 
+- 最新2.0.6-route3：用户撤回连续圆角，要求严格直行1500→原地逆时针90→直行1500，零速达标即交接。已恢复route2原地动作表并删除临时圆角半径/切点草稿。AUTO_SETTLE_MS=0，5mm/0.8度/两侧5rpm/转向角速度2.5度每秒门槛保留，达到门槛当周期推进，无额外停稳计时；X单项仍250ms。四组实际路线模型验证两个交接点即时推进，108组自动转向模型DONE、最大终点0.798度，尚待实车。不能把目标/电压0当成实测轮速0；2Hz旧数据不能精确测定停车瞬间。
+- 当前版本2.0.5-route2：主循环的Autonomous用AutoStraightControl/AutoTurnControl，AUTO_SETTLE_MS=100，仅自动直行/原地转向连续停稳确认从250缩到100ms；X用原Route配置250ms，圆角250ms及本地结束3秒回手动流程保持原样。5mm/0.8度/5rpm/转向2.5度每秒门槛保留，仍为停车原地转向；改AUTO_SETTLE_MS=250可恢复route1确认时间。旧源码和构建产物在build/backups/before-fast-handoff-20261117；候选尚待实车。
+- 当前默认正式路线为1500mm直行→原地逆时针90度→1500mm直行，菜单A执行整条，无额外Wait；X仍为原单项测试。沿用540电机rpm上限、直行400/400rpm/s和turn2快速补角，保留每段停稳；整条新路线未实车。原圆角源码/构建产物保存在build/backups/before-stop-turn-route-20261117，用户自行从VS Code下载。
 - 当前底层基线为2.0，程序与VERSION均为2.0.0，发布标签core-v2.0.0；已有v1.0.0/v1.1.0-voltage等历史标签保留，不移动覆盖。
+- 当前未发布工作区为2.0.6-route3。用户确认轮端450rpm，30:36传动对应代码540电机rpm；include/performance-config.h的EXPERIMENTAL_FAST_ROUTE=true启用实验副本。基线motion-presets.h、低速测试和H1～H4保留。当前路线/X三项默认直线、圆角单侧及原地转向均540电机rpm，弯内180及入弯130/曲率预测保留；不能把540解释为弯内中心恒速或短段必达速度。STR测试1500mm，TURN仍90度。上一版turn1原地90度已有3次完整DONE，turn2八次90度已DONE，但用户报告单次物理偏差，其他角度/负载待验，下载仍由用户执行。
+- 原地转向新增角速度梯形/短弯三角形参考，复用trapezoid-profile.h；按69.85mm轮径、1.2传动比、325mm轮距换算左右轮速，角度/角速度跟踪和原速度环纠偏。实验参数角加速900、角减速1200度/秒²、制动预留120ms、P3/D0.10、末端最低30/24rpm，原0.8度及停稳窗口不变。profile_enabled=true时旧acceleration_rpm_s不再控制斜率；TURN_ANGULAR_PROFILE=false可单独切回用户最后P2/D0.25/640rpm/s、540rpm上限方案。只在main更新/写电机，无新线程；DTA和-turn-profile.csv记录参考及阶段，原DTN兼容、mutex快照与2Hz开关回传保留。详见docs/TURN_TUNING.md；改动前源码及当时构建产物在build/backups/before-turn-profile-20261116。
+- turn2仅在角速度参考结束后（phase4）启用profile_finish_kP=6、最低补角50/30rpm、最低转速权重阈值minimum_rate_deg_s=32；角加减速/制动预留/0.8度与250ms停稳保留，前段同反馈输出逐周期相同。TURN_FAST_FINISH=false可单独恢复上一条turn1补角参数，TURN_ANGULAR_PROFILE=false仍恢复原PD方案。旧源码及构建产物在build/backups/before-turn-finish-20261116。108组模型turn1→turn2均DONE、平均1556→1345ms，标准90度1900→1520ms，最后6度到角度窗口360→200ms；这些不是实车成绩。
 
 - 用户使用台式机开发，也携带 Windows 64 位笔记本去实验室，通过笔记本 USB 连接 VEX V5 主控。
 - 唯一代码仓库为 `https://github.com/HudEn5/Override.git`，日常同步分支为 `main`。
@@ -17,7 +23,7 @@
 
 - 底层2.0默认BARTMOSS_HIGH_SPEED=1，保留独立HighSpeed构建；显式Test构建置0以使用原低速测试参数。高速档位在include/high-speed-config.h，实例局部覆盖加减速度及位置纠偏倍率，H3保留实车基线，H4为同速同加减速、位置纠偏乘二的候选；勿混同之前H4的400rpm/s数据。
 - 当前启动菜单仿Tungsten实际映射：初始化校准期间锁住选择和运动，之后A自动、B手动、新增X测试；选择后松开A/B/X并回中摇杆才进入。本地自动执行一次src/route.cpp，结束停车等3000ms再回手动（已修正上一版立即返回的差异），场控自动不走此倒计时。B或摇杆可立即中断；手动/测试停车长按B一秒回菜单。开机/重连已按住键不能直接选择；选择用X不会切气动，进入手动/测试后X仍为原气动键。详见docs/STARTUP_AUDIT.md，不能笼统宣称与参考逐行完全一致或实车已验证。
-- HIGH_SPEED_ROUTE_DEBUG已移除，自动由启动菜单选择。X测试中HIGH_SPEED_CORNER_TEST=true提供STR/TURN/CNR三项，默认CNR；false恢复H1～H4。原测试配置保留。只改src/route.cpp的RunRoute动作表即可调路线，默认DriveCorner(500,90,500)；直行默认330 rpm、原地相对转向140 rpm、Wait单位毫秒且非阻塞。禁止在RunRoutine中直接vex::wait或另开路线线程。
+- HIGH_SPEED_ROUTE_DEBUG已移除，自动由启动菜单选择。X测试中HIGH_SPEED_CORNER_TEST=true提供STR/TURN/CNR三项，默认CNR；false恢复H1～H4。原测试配置保留。只改src/route.cpp的RunRoute动作表即可调路线，默认DriveStraight(1500)→Turn(90)→DriveStraight(1500)，当前实验档直行/原地上限均540rpm；Wait单位毫秒且非阻塞。禁止在RunRoutine中直接vex::wait或另开路线线程。
 - 除独立Calibration外，Default/HighSpeed/Test/Competition构建连接场控时都由SessionPermissions统一按比赛回调及使能分配权限，忽略菜单；自动不依赖手柄，场控连接时关闭回传。场控接入/拔出会先取消原自动周期，不能继续另一来源的半条路线。拔场控回菜单；Calibration保持原权限。Y可在本地菜单先开LOG，运动权限仍关闭。
 - 高档调试继续2 Hz精简回传，DRA记录run/step/等待/结果并保存-route.csv，同时保留动作原有协议；自动结束回手动后继续发送终态DRA，不把旧运动曲线混入新的X测试。显示H档仅用于H1～H4，三项测试中的STR不误显示H1。
 - include/motion-presets.h 是路线与高速测试的共用参数来源：HighSpeedStraightControl采用H3的320/320 rpm/s、原位置增益；HighSpeedCornerControl采用直线及预测轮加减速预算320/320 rpm/s、弯内180 rpm、入弯偏好130 rpm、弯内加速120 rpm/s、出弯加速240 rpm/s。主循环正式自动与路线调试均显式接入这些配置；普通低速测试保留原参数。新原地转向默认上限140 rpm及复杂组合路线尚未实车验证。

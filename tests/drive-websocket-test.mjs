@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, CORNER_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER } from '../scripts/monitor-drive-websocket.mjs';
+import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, TURN_PROFILE_HEADER, CORNER_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER } from '../scripts/monitor-drive-websocket.mjs';
 
 // 协议契约测试：模拟串口跨消息分片，不能将半行误写成完整样本。
 const received = [];
@@ -92,6 +92,19 @@ assert.equal(TURN_HEADER.split(',').length, 11);
 assert.deepEqual(turnRows, [turn]);
 assert.equal(turnParser.turns, 1);
 assert.equal(turnParser.malformed, 2);
+const turnProfileRows=[];
+const turnProfileParser=new DriveLines(noProfile,noProfile,noProfile,noProfile,noProfile,noProfile,
+  noProfile,noProfile,noProfile,noProfile,noProfile,row=>turnProfileRows.push(row));
+const turnProfile=['11','4020','200','368','180','592','314','1','3'];
+const turnProfileStream=`#web#DTA,${turnProfile.join(',')}\nDTA,broken\n`;
+for(let i=0;i<turnProfileStream.length;i+=3)turnProfileParser.push(turnProfileStream.slice(i,i+3));
+assert.equal(TURN_PROFILE_HEADER.split(',').length,9);
+assert.deepEqual(turnProfileRows,[turnProfile]);assert.equal(turnProfileParser.turnProfiles,1);
+for(const [index,value] of [[2,'-1'],[5,'-10'],[6,'NaN'],[7,'5'],[7,'1.5'],[8,'Infinity']]) {
+  const bad=[...turnProfile];bad[index]=value;turnProfileParser.push(`DTA,${bad.join(',')}\n`);
+}
+assert.equal(turnProfileParser.malformed,7);
+console.log('Angular profile protocol checks passed: DTA fragments, phase and invalid reference fields.');
 const cornerRows = [];
 const cornerParser = new DriveLines(noProfile, noProfile, noProfile, noProfile, noProfile, noProfile, noProfile,
   row => cornerRows.push(row));

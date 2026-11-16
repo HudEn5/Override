@@ -1,8 +1,10 @@
 #pragma once
 
+#include "performance-config.h"
+
 namespace route {
-constexpr double DEFAULT_DRIVE_RPM = 330;
-constexpr double DEFAULT_TURN_RPM = 140;
+constexpr double DEFAULT_DRIVE_RPM = config::ROUTE_DRIVE_RPM;
+constexpr double DEFAULT_TURN_RPM = config::ROUTE_TURN_RPM;
 constexpr double DEFAULT_PUSH_VOLTS = 4.0;
 enum class action { straight, turn, heading, corner, wait, push };
 struct command {

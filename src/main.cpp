@@ -44,8 +44,8 @@ int main() {
 #if !BARTMOSS_CALIBRATION
   static runtime::startup_mode Selection;
 #endif
-  Autonomous.Configure(config::HighSpeedStraightControl(config::StraightControl()), config::TurnControl(),
-                       config::HighSpeedCornerControl(config::CornerControl()));
+  Autonomous.Configure(config::AutoStraightControl(config::StraightControl()), config::AutoTurnControl(config::TurnControl()),
+                       config::RouteCornerControl(config::CornerControl()));
   RegisterCompetitionCallbacks();
 #if BARTMOSS_CALIBRATION
   static calibration_control Calibration(config::CALIBRATION_VOLTAGES, config::CALIBRATION_TIMEOUT_MS);
@@ -58,8 +58,8 @@ int main() {
   static high_speed_control Test;
   Test.Configure(config::HIGH_SPEED_STAGES, config::StraightControl());
   static test_control RouteTest;
-  RouteTest.Configure(config::HighSpeedCornerSettings(), config::HighSpeedStraightControl(config::StraightControl()), config::TurnControl(),
-                      config::HighSpeedCornerControl(config::CornerControl()));
+  RouteTest.Configure(config::HighSpeedCornerSettings(), config::RouteStraightControl(config::StraightControl()),
+                      config::RouteTurnControl(config::TurnControl()), config::RouteCornerControl(config::CornerControl()));
 #else
   static test_control Test;
   Test.Configure(config::TestSettings(), config::StraightControl(), config::TurnControl(), config::CornerControl());

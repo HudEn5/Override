@@ -35,8 +35,11 @@ int main() {
   drive::straight_config c; c.motion.wheel_diameter_mm = 69.85;
   c.left_forward.kS = 400; c.left_forward.kV = 16; c.left_forward.calibrated = true;
   c.right_forward = c.left_reverse = c.right_reverse = c.left_forward;
-  for (int scenario = 0; scenario < 3; ++scenario) {
-    autonomous_program p; p.Configure(c);
+  for (int run = 0; run < 6; ++run) {
+    const int scenario=run%3;
+    drive::turn_config t;t.left_forward=t.right_forward=t.left_reverse=t.right_reverse=c.left_forward;
+    t.profile_enabled=run>=3;
+    autonomous_program p; p.Configure(c,t);
     drive::straight_feedback f;
     f.position.valid = f.velocity.valid = f.motors_online = f.inertial_ready = f.stopped = true;
     double left = 0, right = 0;
@@ -62,6 +65,11 @@ int main() {
     }
     if (scenario) assert(interrupted);
     else {
+      if (std::strcmp(p.Info().status,"DONE")!=0) {
+        std::printf("Mixed route failed: run %d step %u status %s angle %.3f turn %s err %.3f\n",
+            run,p.Info().step,p.Info().status,f.heading_deg,p.Info().turn.status,p.Info().turn.error_deg);
+        std::fflush(stdout);
+      }
       assert(p.Info().finished && p.Info().step == 4 && std::strcmp(p.Info().status, "DONE") == 0);
       assert(std::fabs(f.heading_deg) <= 0.8 && p.Info().left_mV == 0 && p.Info().right_mV == 0);
     }

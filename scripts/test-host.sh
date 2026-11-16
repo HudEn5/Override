@@ -17,6 +17,7 @@ run trapezoid-profile tests/trapezoid-profile-test.cpp
 run trapezoid-motion tests/trapezoid-motion-test.cpp
 run straight tests/drive-straight-test.cpp
 run turn tests/drive-turn-test.cpp
+run turn-profile tests/turn-profile-test.cpp
 run corner tests/drive-corner-test.cpp
 run corner-profile tests/corner-profile-test.cpp
 run corner-models tests/corner-speed-test.cpp
@@ -39,4 +40,5 @@ run runtime-concurrency -pthread -I tests/sampling-mocks src/runtime-info.cpp te
 run calibration-concurrency -pthread -DBARTMOSS_CALIBRATION=1 -I tests/sampling-mocks src/runtime-info.cpp tests/runtime-info-test.cpp
 
 run high-speed tests/high-speed-test.cpp
+run performance tests/performance-test.cpp
 run high-speed-concurrency -pthread -DBARTMOSS_HIGH_SPEED=1 -I tests/sampling-mocks src/runtime-info.cpp tests/runtime-info-test.cpp

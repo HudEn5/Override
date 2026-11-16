@@ -36,6 +36,7 @@
 | include/trapezoid-motion.h | 距离闭环、梯形执行及终点停稳 |
 | include/drive-straight.h | 距离/最高速度的公共直行控制器 |
 | include/drive-turn.h | 相对转向和绝对朝向的公共原地转向控制器 |
+| include/performance-config.h | 实验速度副本、原地角速度规划开关及独立角加减速 |
 | include/drive-corner.h | 连续直行/圆角/直行的公共控制器 |
 | include/drive-push.h | 固定电压定时前推、撤电压后停稳及故障保护 |
 | include/corner-profile.h | 基于曲率变化和左右轮能力的提前速度规划 |

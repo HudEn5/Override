@@ -21,8 +21,9 @@ struct fixture {
     c.prediction_enabled = true; c.corner_rpm = 140; c.corner_floor_rpm = 100;
     c.angle_tolerance_deg = 1.5; c.exit_angle_tolerance_deg = 1.5;
     c.pid.kP = 20; c.pid.kI = 20; c.pid.max_correction = 2000; c.pid.max_integral = 1200;
-    Test.Configure(route ? config::HighSpeedCornerSettings() : config::TestSettings(), s, t,
-                   route ? config::HighSpeedCornerControl(c) : c);
+    Test.Configure(route ? config::HighSpeedCornerSettings() : config::TestSettings(), s,
+                   route ? config::RouteTurnControl(t) : t,
+                   route ? config::RouteCornerControl(c) : c);
     if (warm) Step();
   }
   bool Step(bool allowed = true, int manual_left = 0, int fault = 0) {

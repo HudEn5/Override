@@ -5,12 +5,13 @@
 void autonomous_program::RunRoutine() {
   using namespace route;
   RunRoute({
-      DriveCorner(500, 90, 500),  // 已完成一次实车的连续路线，中途不停稳。
-      // DriveStraight(500),     // 独立直行，默认最高 330 rpm；负数后退。
+      DriveStraight(1500),  // 前进1.5m，当前实验档最高540电机rpm，到位停稳后立即进入转向。
+      Turn(90),             // 原地逆时针90°，当前540rpm上限，使用角速度规划与快速补角。
+      DriveStraight(1500),  // 按转弯后的朝向再前进1.5m，三段之间不额外插入Wait。
+      // DriveCorner(500, 90, 500), // 需要连续圆角时，可用这一条替换上面的三个动作。
       // Wait(200),              // 停车等待 200 毫秒，控制与场控检查仍正常运行。
       // PushFor(1000),          // 到定位机构附近后，以默认4V前推1秒，停稳后继续。
       // PushFor(600, 3.0),      // 可选指定前推电压V；不会自动判断卡入或清零坐标。
-      // Turn(90),               // 原地相对左转 90°，默认单侧上限 140 rpm。
       // DriveStraight(500, 200), // 可为某个动作单独指定较低速度。
       // TurnToHeading(0),       // 按最短方向转到惯导绝对朝向 0°。
   });

@@ -18,7 +18,7 @@ namespace config {
 #if BARTMOSS_HIGH_SPEED != 0 && BARTMOSS_HIGH_SPEED != 1
 #error Invalid high-speed environment
 #endif
-const char PROGRAM_VERSION[] = "2.0.0";  // 底层2.0，运行环境由菜单和场控标识。
+const char PROGRAM_VERSION[] = "2.0.6-route3";  // 自动到位且零速达标即交接，不额外驻停，X仍250ms。
 const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
 // 默认高速菜单；低速测试、比赛和标定可通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION
@@ -129,6 +129,9 @@ inline drive::straight_config StraightControl() {
 }
 inline drive::turn_config TurnControl() {
   drive::turn_config result;
+  result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
+  result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
+  result.track_width_mm = 325;
   result.kP = AUTO_TURN_KP; result.kD = AUTO_TURN_KD;
   result.angle_tolerance_deg = AUTO_ANGLE_TOLERANCE;
   result.pid = DRIVE_VELOCITY_PID;
@@ -136,7 +139,7 @@ inline drive::turn_config TurnControl() {
   result.pid.kP = 20; result.pid.kI = 20;
   result.pid.max_correction = 2000; result.pid.max_integral = 1200;
   result.correction_fraction = 3.0;
-  result.acceleration_rpm_s = 240;
+  result.acceleration_rpm_s = 360;
   result.minimum_settle_rpm = 18;  // 尾段加快，最后 6° 内渐变回 12 rpm。
   result.minimum_finish_rpm = 12;
   result.minimum_rate_deg_s = 16;

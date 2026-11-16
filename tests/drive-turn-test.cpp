@@ -1,4 +1,5 @@
 #include "drive-turn.h"
+#include "performance-config.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -23,7 +24,7 @@ double Motor(int voltage) {
   return std::fabs(static_cast<double>(voltage)) <= 400 ? 0 :
       (voltage > 0 ? voltage - 400 : voltage + 400) / 16.0;
 }
-drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double friction, double maximum = 100) {
+drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double friction, double maximum = 100, bool experiment = false) {
   auto cfg = Settings();
   if (tuned) {
     cfg.kP = 1.6; cfg.acceleration_rpm_s = 240; cfg.minimum_settle_rpm = 18;
@@ -32,6 +33,7 @@ drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double f
     cfg.pid.kP = 20; cfg.pid.kI = 20;
     cfg.pid.max_correction = 2000; cfg.pid.max_integral = 1200;
   }
+  if (experiment) cfg = config::RouteTurnControl(cfg);
   drive::turn_controller c; c.Configure(cfg);
   c.Observe(Feedback(0), true, 0); assert(c.StartTurnRelative(delta, tuned ? maximum : 60));
   double angle = 0, left = 0, right = 0, previous_target = 0;
@@ -49,8 +51,12 @@ drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double f
     const auto v = c.Info();
     assert(std::abs(v.left_mV) <= 12000 && std::abs(v.right_mV) <= 12000);
     assert(std::fabs(v.target_rpm) <= (tuned ? maximum : 60) + 1e-6);
-    if (std::strcmp(v.status, "TURN") == 0)
-      assert(std::fabs(v.target_rpm - previous_target) <= cfg.acceleration_rpm_s * 0.02 + 1e-6);
+    if (std::strcmp(v.status, "TURN") == 0) {
+      const double rate = cfg.profile_enabled ?
+          std::max(cfg.angular_acceleration_deg_s2, cfg.angular_deceleration_deg_s2) /
+              (6 * cfg.wheel_diameter_mm / cfg.motor_revs_per_wheel_rev / cfg.track_width_mm) : cfg.acceleration_rpm_s;
+      assert(std::fabs(v.target_rpm - previous_target) <= rate * 0.02 + 1e-6);
+    }
     previous_target = v.target_rpm;
     if (v.state != drive::turn_state::running) break;
   }
@@ -88,6 +94,15 @@ void Simulate(double delta) {
 }
 
 int main() {
+  double before_ms=0,after_ms=0;unsigned int experimental_turns=0;
+  for(double delta:{-120.,-90.,-30.,30.,90.,120.})for(double friction:{900.,1100.,1300.}){
+    const auto before=LoadedTurn(true,delta,friction+450,friction,140);
+    const auto after=LoadedTurn(true,delta,friction+450,friction,config::ROUTE_TURN_RPM,true);
+    if(after.state!=drive::turn_state::done)std::printf("Experimental turn failed: angle %.0f friction %.0f %s error %.3f\n",delta,friction,after.status,after.error_deg);
+    assert(before.state==drive::turn_state::done && after.state==drive::turn_state::done && std::fabs(after.error_deg)<=.8);
+    before_ms+=before.elapsed_ms;after_ms+=after.elapsed_ms;++experimental_turns;
+  }
+  std::printf("Experimental turn: %u paired cases, mean %.0f -> %.0f ms.\n",experimental_turns,before_ms/experimental_turns,after_ms/experimental_turns);
   unsigned int configured_turns = 0;
   for (double cap : {60.,100.,140.,200.}) for (double delta : {-120.,-90.,-30.,30.,90.,120.})
     for (double friction : {900.,1100.,1300.}) {

@@ -3,7 +3,8 @@
 2026–2027 赛季 VEX V5 机器人控制程序，面向八电机差速底盘、双电机机械臂、夹爪和气动机构。
 提供手动驾驶、底盘运动控制、独立实车测试、标定和遥测功能。
 
-**版本：`2.0.0` · 发布标签：`core-v2.0.0`。** 启动通过菜单选择A自动、B手动、X测试，本地与比赛自动共用`src/route.cpp`。
+**当前基线：`2.0.6-route3`。** 历史底层2.0标签`core-v2.0.0`保留。启动通过菜单选择A自动、B手动、X测试，本地与比赛自动共用`src/route.cpp`。
+当前工作区为`2.0.6-route3`实验：默认540电机rpm（轮端450rpm），自动执行直行1.5m→原地逆时针90°→直行1.5m。到位且零速门槛满足后当周期交接，取消额外确认计时；X单项仍250ms。上一版已有整条路线DONE，本次即时交接待实车。见[路线指南](docs/ROUTE_GUIDE.md)和[转向整定](docs/TURN_TUNING.md)。
 本版本作为自动路线编排的底层基线。软件与模型检查已经覆盖核心控制、调度和并发；实际验证范围及限制见下文。
 
 ## 功能
@@ -43,7 +44,7 @@ cd Override
 脚本支持 `-SdkPath`、`-ToolchainPath` 指定安装位置；多电脑配置见 [设备与同步说明](DEVICE_SYNC.md)。
 
 默认输出为 `build/Bartmoss.bin`，程序名 **Bartmoss**，下载槽位 **1**。
-通过VEX扩展下载后，核对主控显示`2.0.0`，保持车辆静止等待惯导校准完成，再从A/B/X菜单选择模式。
+通过VEX扩展下载后核对版本（当前实验`2.0.6-route3`，发布基线`2.0.0`），保持静止等待惯导校准完成，再从A/B/X菜单选择模式。
 
 ### 运行一次底盘测试
 
@@ -64,7 +65,7 @@ cd Override
 ```
 
 输出`build/highspeed/Bartmoss.bin`，不会覆盖默认下载文件`build/Bartmoss.bin`。
-菜单A执行 `src/route.cpp` 的整条路线，初始路线为前进500 mm → 连续逆时针圆角90° → 前进500 mm。
+菜单A执行 `src/route.cpp` 的整条路线：前进1500 mm → 到位停稳 → 原地逆时针90° → 到角停稳 → 再前进1500 mm。各动作完成后立即衔接，无额外等待。
 路线编排、Wait、无场控测试和比赛接入见 [路线指南](docs/ROUTE_GUIDE.md)。
 在 `include/high-speed-config.h` 将 `HIGH_SPEED_CORNER_TEST` 设为 false，X测试切换为 H1～H4 直行整定：
 200/265/330/330 rpm 四档、1.5～1.8 米行程；H3 保留基线，H4 在同速同加减速下增强位置纠偏，用于对照验证。
@@ -127,8 +128,9 @@ cd Override
 | [motion-presets.h](include/motion-presets.h) | 路线与高速测试共用的加减速和圆角规划配置 |
 | [high-speed-config.h](include/high-speed-config.h) | X测试项目、高速档位与候选参数 |
 | [route-commands.h](include/route-commands.h) | 路线接口、默认转速与前推电压 |
+| [performance-config.h](include/performance-config.h) | 实验开关、轮端450rpm对应上限、原地角加减速与控制参数副本 |
 
-显式Test构建保留的低速参数如下；默认高速构建的X测试为500mm/330rpm、90°/140rpm、500/90°/500圆角/330rpm上限：
+显式Test构建保留的低速参数如下；当前turn2默认高速构建的X测试为1500mm/540rpm、90°/540rpm、500/90°/500圆角/540rpm单侧上限。关闭实验开关后速度恢复2.0的330/140/330rpm，STR距离仍为1500mm：
 
 | 项目 | 距离 / 相对转角 | 最高电机输出轴转速 |
 | --- | --- | --- |
@@ -178,16 +180,15 @@ cd Override
 ```cpp
 using namespace route;
 RunRoute({
-    DriveStraight(500),
-    Wait(200),
+    DriveStraight(1500),
     Turn(90),
-    DriveStraight(500),
+    DriveStraight(1500),
 });
 ```
 
-默认直行330 rpm、原地转向140 rpm，距离mm、角度度、等待毫秒；`Turn`为相对角，正角逆时针。
+发布基线默认直行330rpm、原地转向140rpm；当前turn2默认540/540电机rpm。距离mm、角度度、等待毫秒；`Turn`为相对角，正角逆时针。
 `PushFor(1000)`为定位机构提供一秒定时前推，默认4V；可选第二参数指定电压V，不自动识别对接成功。
-连续不停顿使用 `DriveCorner(500, 90, 500)`，它也是当前文件默认路线。`TurnToHeading`支持绝对朝向。
+连续圆角可另用 `DriveCorner(500, 90, 500)`；当前默认采用独立直行/原地转向/直行。`TurnToHeading`支持绝对朝向。
 测试与比赛共用高速参数，低速三项测试保留；任一动作故障或取消会停止整条路线。
 `Wait` 不阻塞主循环。完整接口、按钮和验证范围见 [路线指南](docs/ROUTE_GUIDE.md)。
 
@@ -212,6 +213,7 @@ node scripts/monitor-drive-websocket.mjs 120
 | `-profile.csv` / `-heading.csv` | 直行规划 / 航向保持 |
 | `-velocity.csv` / `-quality.csv` | 速度 PID / 测速质量 |
 | `-turn.csv` / `-corner.csv` | 原地转向 / 连续圆角 |
+| `-turn-profile.csv` | 原地角速度规划参考、阶段和角度跟踪误差 |
 | `-motors.csv` | LM/LF 电机诊断 |
 | `-route.csv` / `-push.csv` | 自动路线步骤与结果 / 定时前推电压、计时和停稳 |
 
@@ -239,7 +241,7 @@ node tests/drive-websocket-test.mjs
 node tests/sync-github.test.mjs
 ```
 
-当前软件验证包括30个C++测试程序、当前高速圆角432组与原地转向72组角度/速度/负载模型，
+当前工作区软件验证包括32个C++测试程序、108组角速度规划对照、当前高速圆角432组与原地转向72组角度/速度/负载模型，
 以及原预测504组等回归、576种基础环境组合、按键与动作生命周期、反馈故障和采样/回调/快照并发一致性检查。
 Default、Test、Competition、Calibration、HighSpeed 五种 V5 SDK 构建均已通过。
 
