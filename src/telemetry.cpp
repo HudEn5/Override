@@ -44,9 +44,37 @@ void DriveTelemetry() {
     drive::sample value;
     unsigned int dropped = 0;
     if (drive::PopSample(value, dropped)) {
+#if !BARTMOSS_HIGH_SPEED
       drive::PrintSample(value, dropped);
+#endif
       const runtime_info info = ReadRuntimeInfo();
       PrintMotion(value.sequence, info.test);
+      const bool route_terminal = info.local_selection && info.local_mode != runtime::local_mode::test && info.automatic.run;
+      if (info.route_debug || info.autonomous_period || route_terminal) {
+        const auto& a = info.automatic;
+        printf("DRA,%u,%.1f,%u,%u,%d,%d,%d,%d,%d\n", value.sequence, a.time_ms, a.run, a.step,
+               static_cast<int>(a.motion), a.active, a.finished, a.waiting, a.result);
+        test_info motion;
+        const bool moving_route = (info.route_debug || info.autonomous_period) && a.run;
+        if (moving_route && a.motion == autonomous_motion::push) {
+          const auto& p = a.push;
+          printf("DPS,%u,%.1f,%.1f,%.1f,%d,%d,%d,%d,%.2f,%.2f\n", value.sequence,
+                 p.time_ms, p.elapsed_ms, p.duration_ms, p.left_mV, p.right_mV,
+                 static_cast<int>(p.state), p.settling, p.left_rpm, p.right_rpm);
+        }
+        motion.visible = moving_route && a.motion != autonomous_motion::none && a.motion != autonomous_motion::push;
+        motion.selected = a.motion == autonomous_motion::corner ? test_motion::corner :
+                          a.motion == autonomous_motion::turn ? test_motion::turn : test_motion::straight;
+        motion.straight = a.drive; motion.turn = a.turn; motion.corner = a.corner;
+        PrintMotion(value.sequence, motion);
+      }
+#if BARTMOSS_HIGH_SPEED
+      const auto& h = info.tuning;
+      if (info.test.visible && h.run) printf("DHS,%u,%.1f,%u,%u,%d,%d,%.1f,%.2f,%.2f,%.2f,%.2f,%.2f,%.1f,%.1f,%d\n",
+          value.sequence, h.time_ms, h.run, h.stage + 1, h.direction, h.state, h.elapsed_ms,
+          info.test.straight.motion.distance_mm, info.test.straight.motion.remaining_mm,
+          h.peak_rpm, h.peak_heading_deg, h.speed_rms_rpm, h.high_voltage_ms, h.at_speed_ms, h.qualified);
+#endif
 #if BARTMOSS_CALIBRATION
       if (info.calibration.visible && info.calibration.feedforward)
         PrintHeading(value.sequence, info.calibration.heading);

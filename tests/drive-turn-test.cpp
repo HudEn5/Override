@@ -23,7 +23,7 @@ double Motor(int voltage) {
   return std::fabs(static_cast<double>(voltage)) <= 400 ? 0 :
       (voltage > 0 ? voltage - 400 : voltage + 400) / 16.0;
 }
-drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double friction) {
+drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double friction, double maximum = 100) {
   auto cfg = Settings();
   if (tuned) {
     cfg.kP = 1.6; cfg.acceleration_rpm_s = 240; cfg.minimum_settle_rpm = 18;
@@ -33,7 +33,7 @@ drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double f
     cfg.pid.max_correction = 2000; cfg.pid.max_integral = 1200;
   }
   drive::turn_controller c; c.Configure(cfg);
-  c.Observe(Feedback(0), true, 0); assert(c.StartTurnRelative(delta, tuned ? 100 : 60));
+  c.Observe(Feedback(0), true, 0); assert(c.StartTurnRelative(delta, tuned ? maximum : 60));
   double angle = 0, left = 0, right = 0, previous_target = 0;
   const auto motor = [&](int mV, double speed) {
     const double v = std::fabs(static_cast<double>(mV));
@@ -48,6 +48,7 @@ drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double f
     c.Observe(Feedback(i * 20, angle, left, right), true, i * 20); c.UpdateTurn();
     const auto v = c.Info();
     assert(std::abs(v.left_mV) <= 12000 && std::abs(v.right_mV) <= 12000);
+    assert(std::fabs(v.target_rpm) <= (tuned ? maximum : 60) + 1e-6);
     if (std::strcmp(v.status, "TURN") == 0)
       assert(std::fabs(v.target_rpm - previous_target) <= cfg.acceleration_rpm_s * 0.02 + 1e-6);
     previous_target = v.target_rpm;
@@ -87,6 +88,16 @@ void Simulate(double delta) {
 }
 
 int main() {
+  unsigned int configured_turns = 0;
+  for (double cap : {60.,100.,140.,200.}) for (double delta : {-120.,-90.,-30.,30.,90.,120.})
+    for (double friction : {900.,1100.,1300.}) {
+      const auto r = LoadedTurn(true, delta, friction + 450, friction, cap);
+      if (r.state != drive::turn_state::done)
+        std::printf("Route turn failed: cap %.0f delta %.0f friction %.0f %s error %.3f\n",cap,delta,friction,r.status,r.error_deg);
+      assert(r.state == drive::turn_state::done && std::fabs(r.error_deg) <= .8);
+      ++configured_turns;
+    }
+  std::printf("Route turn caps passed: %u signed 30/90/120-degree, 60/100/140/200-rpm and friction cases.\n",configured_turns);
   const auto stalled = LoadedTurn(false, 90, 1550, 1100);
   assert(stalled.state == drive::turn_state::error && std::strcmp(stalled.status, "TIMEOUT") == 0);
   for (double friction : {900.0, 1100.0, 1300.0})

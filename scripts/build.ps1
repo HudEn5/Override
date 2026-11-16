@@ -3,7 +3,7 @@ param(
     [string]$ToolchainPath = "$env:APPDATA/Code/User/globalStorage/vexrobotics.vexcode/tools/cpp/toolchain_win32",
     [string]$EnvironmentRoot = '',
     [switch]$Rebuild,
-    [ValidateSet('Default', 'Test', 'Competition', 'Calibration')]
+    [ValidateSet('Default', 'Test', 'Competition', 'Calibration', 'HighSpeed')]
     [string]$Mode = 'Default'
 )
 
@@ -42,8 +42,9 @@ $makeArguments = @(
 if ($Mode -ne 'Default') {
     $modeFlag = if ($Mode -eq 'Competition') { 1 } else { 0 }
     $calibrationFlag = if ($Mode -eq 'Calibration') { 1 } else { 0 }
+    $highSpeedFlag = if ($Mode -eq 'HighSpeed') { 1 } else { 0 }
     $makeArguments += @("BUILD=build/$($Mode.ToLowerInvariant())",
-                        "DEFINES=-DVexV5 -DBARTMOSS_COMPETITION=$modeFlag -DBARTMOSS_CALIBRATION=$calibrationFlag")
+                        "DEFINES=-DVexV5 -DBARTMOSS_COMPETITION=$modeFlag -DBARTMOSS_CALIBRATION=$calibrationFlag -DBARTMOSS_HIGH_SPEED=$highSpeedFlag")
 }
 if ($Rebuild) { $makeArguments = @('-B') + $makeArguments }
 $previousOS = $env:OS

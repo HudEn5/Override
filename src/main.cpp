@@ -4,9 +4,13 @@
 #include "autonomous.h"
 #include "competition-control.h"
 #include "runtime-info.h"
+#include "motion-presets.h"
+#include "startup-mode.h"
 #if BARTMOSS_CALIBRATION
 #include "calibration-config.h"
-#elif !BARTMOSS_COMPETITION
+#elif BARTMOSS_HIGH_SPEED
+#include "high-speed-config.h"
+#else
 #include "test-config.h"
 #endif
 
@@ -37,7 +41,11 @@ int main() {
   }
   static manual::driver_control DriverControl(config::PISTON_INITIAL_STATE);
   static autonomous_program Autonomous;
-  Autonomous.Configure(config::StraightControl(), config::TurnControl(), config::CornerControl());
+#if !BARTMOSS_CALIBRATION
+  static runtime::startup_mode Selection;
+#endif
+  Autonomous.Configure(config::HighSpeedStraightControl(config::StraightControl()), config::TurnControl(),
+                       config::HighSpeedCornerControl(config::CornerControl()));
   RegisterCompetitionCallbacks();
 #if BARTMOSS_CALIBRATION
   static calibration_control Calibration(config::CALIBRATION_VOLTAGES, config::CALIBRATION_TIMEOUT_MS);
@@ -46,7 +54,13 @@ int main() {
   Calibration.ConfigureReverseFeedforward(config::FF_LEFT_REVERSE, config::FF_RIGHT_REVERSE);
   Calibration.ConfigureHeading(config::DRIVE_HEADING);
   Calibration.ConfigureVelocityPID(config::DRIVE_VELOCITY_PID);
-#elif !BARTMOSS_COMPETITION
+#elif BARTMOSS_HIGH_SPEED
+  static high_speed_control Test;
+  Test.Configure(config::HIGH_SPEED_STAGES, config::StraightControl());
+  static test_control RouteTest;
+  RouteTest.Configure(config::HighSpeedCornerSettings(), config::HighSpeedStraightControl(config::StraightControl()), config::TurnControl(),
+                      config::HighSpeedCornerControl(config::CornerControl()));
+#else
   static test_control Test;
   Test.Configure(config::TestSettings(), config::StraightControl(), config::TurnControl(), config::CornerControl());
 #endif
@@ -55,19 +69,13 @@ int main() {
   vex::timer ControlTimer;
   double previous_time = ControlTimer.time(vex::msec);
   unsigned int tick = 0;
+  bool route_field_owner = false;
   while (true) {
     const double now = ControlTimer.time(vex::msec);
     const double dt = now - previous_time; previous_time = now;
     const bool connected = Competition.isFieldControl() || Competition.isCompetitionSwitch();
     const competition_request request = ReadCompetitionRequest();
-    const auto access = runtime::Permissions(config::PROGRAM_MODE, configured, connected,
-        Competition.isEnabled(), Competition.isDriverControl(), Competition.isAutonomous(), Controller.installed(), request.stage);
     const manual::Input input = hardware::ReadInput();
-    const bool telemetry = Telemetry.Update(input.telemetry, access.telemetry);
-    drive::SetTelemetryEnabled(telemetry);
-    manual::Output output = DriverControl.Update(input, access.manual, config::JOYSTICK_DEADBAND, config::MAX_VOLTAGE,
-        config::ARM_UP_VOLTAGE, config::ARM_DOWN_VOLTAGE, config::CLAW_VOLTAGE * config::CLAW_CLOSE_DIRECTION);
-    drive::BeginCommandUpdate();
     drive::sample speed;
     const bool have_speed = drive::ReadLatestSample(speed);
     double heading = 0;
@@ -91,6 +99,26 @@ int main() {
     frame.velocity.left_rpm = speed.left.encoder_rpm; frame.velocity.right_rpm = speed.right.encoder_rpm;
     frame.stopped = frame.velocity.valid && std::fabs(frame.velocity.left_rpm) < 5 && std::fabs(frame.velocity.right_rpm) < 5;
 #endif
+#if !BARTMOSS_CALIBRATION
+    const bool initialization_ready = inertial != hardware::InertialState::calibrating;
+    const bool sticks = std::abs(input.y_axis) > config::JOYSTICK_DEADBAND ||
+                        std::abs(input.angular_axis) > config::JOYSTICK_DEADBAND;
+    const bool auto_ready = frame.stopped && frame.motors_online && frame.inertial_ready && frame.position.valid;
+#endif
+#if BARTMOSS_CALIBRATION
+    const auto access = runtime::Permissions(config::PROGRAM_MODE, configured, connected,
+        Competition.isEnabled(), Competition.isDriverControl(), Competition.isAutonomous(), Controller.installed(), request.stage);
+#else
+    Selection.Update(input, configured && Controller.installed() && initialization_ready, connected, sticks, frame.stopped,
+                     auto_ready, Autonomous.Info().finished, now);
+    const auto access = runtime::SessionPermissions(Selection, configured && initialization_ready, connected,
+        Competition.isEnabled(), Competition.isDriverControl(), Competition.isAutonomous(), Controller.installed(), request.stage);
+#endif
+    const bool telemetry = Telemetry.Update(input.telemetry, access.telemetry);
+    drive::SetTelemetryEnabled(telemetry);
+    manual::Output output = DriverControl.Update(input, access.manual, config::JOYSTICK_DEADBAND, config::MAX_VOLTAGE,
+        config::ARM_UP_VOLTAGE, config::ARM_DOWN_VOLTAGE, config::CLAW_VOLTAGE * config::CLAW_CLOSE_DIRECTION);
+    drive::BeginCommandUpdate();
     bool test_owns_drive = false;
     int mode = 0;
     double target_rpm = 0;
@@ -103,16 +131,40 @@ int main() {
       mode = info.calibration.speed_control ? 5 : info.calibration.feedforward ? 4 : 1;
       target_rpm = info.calibration.target_rpm;
     }
-#elif !BARTMOSS_COMPETITION
+#else
+#if BARTMOSS_HIGH_SPEED
+    if (config::HIGH_SPEED_CORNER_TEST) {
+      test_owns_drive = RouteTest.Update(input, output, access.tests, now, frame);
+      info.test = RouteTest.Info();
+    } else {
+      test_owns_drive = Test.Update(input, output, access.tests, now, frame);
+      info.test = Test.Info(); info.tuning = Test.Metrics();
+      info.high_speed_stages = true;
+    }
+#else
     test_owns_drive = Test.Update(input, output, access.tests, now, frame);
     info.test = Test.Info();
+#endif
     if (info.test.visible) {
       mode = info.test.selected == test_motion::straight ? 6 : info.test.selected == test_motion::turn ? 3 : 8;
       target_rpm = info.test.target_rpm;
     }
 #endif
-    Autonomous.Update(access.autonomous, frame, now);
-    if (access.autonomous) {
+#if !BARTMOSS_CALIBRATION
+    info.local_selection = !connected;
+    info.local_mode = Selection.Mode(); info.controls_armed = Selection.Armed(); info.auto_ready = auto_ready;
+    info.initializing = !initialization_ready;
+    info.returning_to_manual = Selection.ReturningToManual(); info.return_remaining_ms = Selection.ReturnRemainingMs();
+    info.route_debug = !connected && Selection.Mode() == runtime::local_mode::automatic;
+    if (!connected && !access.autonomous && Autonomous.Info().active) Autonomous.CancelRoutine();
+#endif
+    const bool execute_route = access.autonomous;
+    // 本地自动和场控自动切换时建立新运行周期，不能沿用另一来源的半条路线。
+    if (connected != route_field_owner) {
+      Autonomous.Update(false, frame, now); route_field_owner = connected;
+    }
+    Autonomous.Update(execute_route, frame, now);
+    if (execute_route) {
       output.L_voltage = Autonomous.Info().left_mV; output.R_voltage = Autonomous.Info().right_mV;
       mode = 7;
       target_rpm = Autonomous.Info().motion == autonomous_motion::corner ? Autonomous.Info().corner.center_rpm :
@@ -120,13 +172,13 @@ int main() {
     }
     if (inertial == hardware::InertialState::calibrating) output.L_voltage = output.R_voltage = 0;
     // 唯一电机写入点；选择测试、完成、取消及场控禁用均保持明确的制动。
-    hardware::Apply(output, true, (connected && !access.manual) || test_owns_drive ||
+    hardware::Apply(output, true, (connected && !access.manual) || test_owns_drive || execute_route || (!access.manual && !access.autonomous) ||
                     inertial == hardware::InertialState::calibrating);
-    drive::PublishCommand(output.L_voltage, output.R_voltage, access.manual || access.autonomous, true, mode, target_rpm);
+    drive::PublishCommand(output.L_voltage, output.R_voltage, access.manual || execute_route, true, mode, target_rpm);
     info.input = input; info.output = output; info.configured = configured;
-    info.enabled = access.manual || access.autonomous; info.telemetry = telemetry;
+    info.enabled = access.manual || execute_route; info.telemetry = telemetry;
     info.tick = tick++; info.dt = dt; info.automatic = Autonomous.Info();
-    info.autonomous_period = access.autonomous; info.phase = request;
+    info.autonomous_period = execute_route; info.phase = request;
     PublishRuntimeInfo(info);
     vex::wait(config::UPDATE_TIME, vex::msec);
   }

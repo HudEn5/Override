@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, CORNER_HEADER } from '../scripts/monitor-drive-websocket.mjs';
+import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, CORNER_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER } from '../scripts/monitor-drive-websocket.mjs';
 
 // 协议契约测试：模拟串口跨消息分片，不能将半行误写成完整样本。
 const received = [];
@@ -103,3 +103,73 @@ assert.deepEqual(cornerRows, [corner]);
 assert.equal(cornerParser.corners, 1);
 assert.equal(cornerParser.malformed, 2);
 console.log('WebSocket protocol checks passed: DS2, DLM, DHD, DVL, DTP, DSQ, DTN, DCR, legacy DSV, fragments and invalid rows.');
+
+const tuningRows = [];
+const tuningParser = new DriveLines(()=>{},()=>{},()=>{},()=>{},()=>{},()=>{},()=>{},()=>{}, row=>tuningRows.push(row));
+const tuning = ['11','4000','1','2','-1','2','3500','-1497','-3','268','1.2','15','0','600','1'];
+const tuningStream = `#web#DHS,${tuning.join(',')}\nDHS,broken\nDHS,${[...tuning.slice(0,14),'NaN'].join(',')}\n`;
+for(let i=0;i<tuningStream.length;i+=3)tuningParser.push(tuningStream.slice(i,i+3));
+assert.equal(TUNING_HEADER.split(',').length,15);
+assert.deepEqual(tuningRows,[tuning]);assert.equal(tuningParser.tuning,1);assert.equal(tuningParser.malformed,2);
+console.log('High-speed summary protocol checks passed.');
+
+// 实测出现过列数与有限数值均正确、标志却被错位成小数的坏行。
+const rejected = new DriveLines(() => assert.fail('语义破损的速度行应拒绝'));
+for (const [index, value] of [[3, '16'], [23, '0.00'], [24, '2'], [25, '12001'], [27, '9']]) {
+  const bad = [...current]; bad[index] = value;
+  rejected.push(`DS2,${bad.join(',')}\n`);
+}
+assert.equal(rejected.malformed, 5);
+for (const [index, value] of [[3, '5'], [4, '0'], [5, '9'], [9, '-1'], [14, '1.00'], [13, '299'], [5, '1']]) {
+  const bad = [...tuning]; bad[index] = value;
+  tuningParser.push(`DHS,${bad.join(',')}\n`);
+}
+assert.equal(tuningParser.tuning, 1);
+assert.equal(tuningParser.malformed, 9);
+// 精简高速流允许没有 DS2；目标减误差仍可还原两侧反馈速度。
+let compactVelocity, compactTuning;
+const compact = new DriveLines(() => assert.fail('精简流没有 DS2'), () => {}, () => {},
+  row => { compactVelocity = row; }, () => {}, () => {}, () => {}, () => {},
+  row => { compactTuning = row; });
+const compactStream = `DTP,${profile.join(',')}\nDHD,${heading.join(',')}\nDVL,${velocity.join(',')}\nDHS,${tuning.join(',')}\n`;
+for (let i = 0; i < compactStream.length; i += 7) compact.push(compactStream.slice(i, i + 7));
+assert.equal(compact.malformed, 0);
+assert.equal(compact.tuning, 1);
+assert.deepEqual(compactTuning, tuning);
+assert.equal(Number(compactVelocity[2]) - Number(compactVelocity[4]), 90);
+assert.equal(Number(compactVelocity[3]) - Number(compactVelocity[5]), 110);
+console.log('Semantic rejection and compact high-speed stream checks passed.');
+const compactCornerRows = [];
+const compactCorner = new DriveLines(noProfile, noProfile, noProfile, () => {}, noProfile, noProfile, noProfile,
+  row => compactCornerRows.push(row));
+const cornerOnlyStream = `DCR,${corner.join(',')}\nDVL,${velocity.join(',')}\n`;
+for (let i = 0; i < cornerOnlyStream.length; i += 7) compactCorner.push(cornerOnlyStream.slice(i, i + 7));
+assert.equal(compactCorner.corners, 1); assert.equal(compactCorner.velocities, 1);
+assert.equal(compactCorner.malformed, 0); assert.deepEqual(compactCornerRows, [corner]);
+console.log('Compact corner stream checks passed without DS2 or DHS.');
+const routeRows = [];
+const routeParser = new DriveLines(noProfile, noProfile, noProfile, noProfile, noProfile, noProfile, noProfile, noProfile, noProfile,
+  row => routeRows.push(row));
+const routeRow = ['12','5000','1','2','0','1','0','1','1'];
+const routeDone = ['13','5500','1','3','3','0','1','0','2'];
+const routeStream = `#web#DRA,${routeRow.join(',')}\nDRA,${routeDone.join(',')}\n`;
+for (let i = 0; i < routeStream.length; i += 3) routeParser.push(routeStream.slice(i, i + 3));
+assert.equal(ROUTE_HEADER.split(',').length, 9); assert.deepEqual(routeRows, [routeRow, routeDone]);
+for (const [index, value] of [[3, '-1'], [4, '5'], [6, '1'], [7, '1.0'], [8, '5']]) {
+  const bad = [...routeRow]; bad[index] = value; routeParser.push(`DRA,${bad.join(',')}\n`);
+}
+assert.equal(routeParser.routes, 2); assert.equal(routeParser.malformed, 5);
+console.log('Route status protocol checks passed: fragmented WAIT/DONE and invalid state rejection.');
+const pushRows = [];
+const pushParser = new DriveLines(noProfile,noProfile,noProfile,noProfile,noProfile,noProfile,noProfile,noProfile,noProfile,()=>{}, row=>pushRows.push(row));
+const push = ['10','5000','800','1000','4000','4000','1','0','0','0'];
+const settle = ['11','5200','1000','1000','0','0','1','1','0','0'];
+const pushStream = `DRA,12,5400,1,0,4,1,0,0,1\nDPS,${push.join(',')}\nDPS,${settle.join(',')}\n`;
+for (let i=0;i<pushStream.length;i+=3) pushParser.push(pushStream.slice(i,i+3));
+assert.equal(PUSH_HEADER.split(',').length,10); assert.deepEqual(pushRows,[push,settle]);
+assert.equal(pushParser.routes,1); assert.equal(pushParser.pushes,2); assert.equal(pushParser.malformed,0);
+for (const [index,value] of [[3,'5001'],[4,'12001'],[5,'-1'],[6,'5'],[7,'1']]) {
+  const bad=[...push];bad[index]=value;pushParser.push(`DPS,${bad.join(',')}\n`);
+}
+assert.equal(pushParser.malformed,5); assert.equal(pushParser.pushes,2);
+console.log('Push protocol checks passed: stalled force/settle fragments, route motion=4 and invalid duration/voltage/state rejection.');

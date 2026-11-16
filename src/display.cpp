@@ -3,9 +3,13 @@
 #include "robot-config.h"
 #include "drive-sampling.h"
 #include <cstdio>
+#include <cstring>
 
 namespace {
 const char* Environment() {
+#if BARTMOSS_HIGH_SPEED
+  return "HS";
+#endif
   return config::PROGRAM_MODE == runtime::program_mode::competition ? "COMP" :
       config::PROGRAM_MODE == runtime::program_mode::calibration ? "CAL" : "TEST";
 }
@@ -27,6 +31,9 @@ void TestLines(const test_info& test, bool log, char (&lines)[3][20]) {
 }
 
 void ControllerInfoDisplay() {
+#if BARTMOSS_HIGH_SPEED
+  char previous[3][20] = {};
+#endif
   while (true) {
     const runtime_info info = ReadRuntimeInfo();
     const double left = ArmL ? ArmL->position(vex::deg) * config::ARM_UP_DIRECTION : 0;
@@ -37,6 +44,14 @@ void ControllerInfoDisplay() {
       snprintf(lines[1], sizeof(lines[1]), "%s CFG%d ARM%d", Environment(), info.configured, info.output.arm_enabled);
       snprintf(lines[2], sizeof(lines[2]), "LOG:%s Y %u", info.telemetry ? "ON" : "OFF", (info.tick / 20) % 10);
       if (info.test.visible) TestLines(info.test, info.telemetry, lines);
+#if BARTMOSS_HIGH_SPEED
+      if (info.test.visible && info.high_speed_stages) {
+        snprintf(lines[0], sizeof(lines[0]), "H%u %+.0f %.0frpm", info.tuning.stage + 1, info.test.request_mm, info.test.maximum_rpm);
+        snprintf(lines[1], sizeof(lines[1]), "%s P%.0f E%.1f", info.test.status, info.tuning.peak_rpm, info.tuning.peak_heading_deg);
+        snprintf(lines[2], sizeof(lines[2]), "%s LOG:%s", info.tuning.state == 2 ?
+                 (info.tuning.qualified ? "SPEED OK" : "LOW SPEED") : "A:GO B:STOP", info.telemetry ? "ON" : "OFF");
+      }
+#endif
 #if BARTMOSS_CALIBRATION
       if (info.calibration.visible) {
         const auto& c = info.calibration;
@@ -46,14 +61,45 @@ void ControllerInfoDisplay() {
         snprintf(lines[2], sizeof(lines[2]), "LOG:%s Y", info.telemetry ? "ON" : "OFF");
       }
 #endif
+      if (info.local_selection) {
+        if (info.local_mode == runtime::local_mode::select) {
+          snprintf(lines[0], sizeof(lines[0]), "A:AUTO B:MANUAL");
+          snprintf(lines[1], sizeof(lines[1]), "X:TEST LOG:%s", info.telemetry ? "ON" : "OFF");
+          snprintf(lines[2], sizeof(lines[2]), "%s", info.auto_ready ? "Release keys/choose" : "AUTO: WAIT READY");
+        } else if (!info.controls_armed) {
+          snprintf(lines[0], sizeof(lines[0]), "%s SELECTED", info.local_mode == runtime::local_mode::automatic ? "AUTO" :
+                   info.local_mode == runtime::local_mode::manual ? "MANUAL" : "TEST");
+          snprintf(lines[1], sizeof(lines[1]), "Release A/B/X");
+          snprintf(lines[2], sizeof(lines[2]), "Center sticks");
+        } else if (info.local_mode == runtime::local_mode::manual) {
+          snprintf(lines[1], sizeof(lines[1]), "MANUAL %s", info.automatic.run ? info.automatic.status : "READY");
+          snprintf(lines[2], sizeof(lines[2]), "B1s:MENU LOG:%s", info.telemetry ? "ON" : "OFF");
+        } else if (info.local_mode == runtime::local_mode::automatic && !info.autonomous_period) {
+          snprintf(lines[0], sizeof(lines[0]), "AUTO WAIT READY");
+          snprintf(lines[2], sizeof(lines[2]), "B:STOP LOG:%s", info.telemetry ? "ON" : "OFF");
+        }
+      }
       if (info.autonomous_period) {
         snprintf(lines[0], sizeof(lines[0]), "AUTO %s", info.automatic.status);
         snprintf(lines[1], sizeof(lines[1]), "STEP %u", info.automatic.step);
-        snprintf(lines[2], sizeof(lines[2]), "COMP %s", info.automatic.motion == autonomous_motion::corner ?
-            info.automatic.corner.status : info.automatic.motion == autonomous_motion::turn ?
-            info.automatic.turn.status : info.automatic.drive.status);
+        snprintf(lines[2], sizeof(lines[2]), "%s LOG:%s", info.automatic.waiting ? "WAIT" :
+            info.automatic.motion == autonomous_motion::corner ? info.automatic.corner.status :
+            info.automatic.motion == autonomous_motion::push ? info.automatic.push.status :
+            info.automatic.motion == autonomous_motion::turn ? info.automatic.turn.status : info.automatic.drive.status,
+            info.telemetry ? "ON" : "OFF");
+        if (info.returning_to_manual)
+          snprintf(lines[2], sizeof(lines[2]), "MANUAL IN %.1fs", info.return_remaining_ms / 1000);
+      }
+      if (info.initializing) {
+        snprintf(lines[0], sizeof(lines[0]), "INITIALIZING");
+        snprintf(lines[1], sizeof(lines[1]), "IMU CALIBRATING");
+        snprintf(lines[2], sizeof(lines[2]), "KEEP ROBOT STILL");
       }
       for (int row = 0; row < 3; ++row) {
+#if BARTMOSS_HIGH_SPEED
+        if (std::strcmp(previous[row], lines[row]) == 0) continue;
+        snprintf(previous[row], sizeof(previous[row]), "%s", lines[row]);
+#endif
         Controller.Screen.setCursor(row + 1, 1); Controller.Screen.print("%-19s", lines[row]);
       }
     }
@@ -70,7 +116,12 @@ void ControllerInfoDisplay() {
     Brain.Screen.printAt(10, 185, "U=%5d AL=%5.1f AR=%5.1f      ", info.output.arm_voltage, left, right);
     Brain.Screen.printAt(10, 210, "R1=%d R2=%d ARM=%d dt=%4.0fms      ", info.input.arm_up, info.input.arm_down, info.output.arm_enabled, info.dt);
     Brain.Screen.printAt(10, 235, true, "%s %s                                  ", Environment(),
+                         info.local_selection && info.local_mode == runtime::local_mode::select ? "A:AUTO B:MANUAL X:TEST" :
                          info.autonomous_period ? info.automatic.status : info.test.visible ? info.test.status : "MANUAL");
+#if BARTMOSS_HIGH_SPEED
+    vex::wait(500, vex::msec);
+#else
     vex::wait(200, vex::msec);
+#endif
   }
 }

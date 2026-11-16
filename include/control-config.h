@@ -12,9 +12,15 @@
 
 // 智能端口填写主控上的编号 1～21；三线端口填写 'A'～'H'。
 namespace config {
-const char PROGRAM_VERSION[] = "1.6.0-tests";
+#ifndef BARTMOSS_HIGH_SPEED
+#define BARTMOSS_HIGH_SPEED 1
+#endif
+#if BARTMOSS_HIGH_SPEED != 0 && BARTMOSS_HIGH_SPEED != 1
+#error Invalid high-speed environment
+#endif
+const char PROGRAM_VERSION[] = "2.0.0";  // 底层2.0，运行环境由菜单和场控标识。
 const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
-// 默认日常测试；标定与比赛分别通过独立构建参数启用。
+// 默认高速菜单；低速测试、比赛和标定可通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION
 #define BARTMOSS_COMPETITION 0
 #endif
@@ -24,8 +30,8 @@ const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
 #if (BARTMOSS_COMPETITION != 0 && BARTMOSS_COMPETITION != 1) || (BARTMOSS_CALIBRATION != 0 && BARTMOSS_CALIBRATION != 1)
 #error Invalid Bartmoss environment
 #endif
-#if BARTMOSS_COMPETITION && BARTMOSS_CALIBRATION
-#error Competition and calibration cannot be enabled together
+#if (BARTMOSS_COMPETITION + BARTMOSS_CALIBRATION + BARTMOSS_HIGH_SPEED) > 1
+#error Select only one specialized environment
 #endif
 constexpr runtime::program_mode PROGRAM_MODE = BARTMOSS_COMPETITION ? runtime::program_mode::competition :
     BARTMOSS_CALIBRATION ? runtime::program_mode::calibration : runtime::program_mode::test;
@@ -82,7 +88,11 @@ const int AngularAxis = 1;
 const int JOYSTICK_DEADBAND = 5;  // 单位为百分比；死区外重新线性映射输出
 const int MAX_VOLTAGE = 12000;
 const int UPDATE_TIME = 10;  // 缩短输入采样和输出更新的等待时间，实际周期可在屏幕查看。
-constexpr int TELEMETRY_INTERVAL_MS = 200;  // 回传最多 5 Hz；内部速度采样仍为约 50 Hz。
+#if BARTMOSS_HIGH_SPEED
+constexpr int TELEMETRY_INTERVAL_MS = 500;  // 高速仅回传控制曲线和汇总，最多 2 Hz。
+#else
+constexpr int TELEMETRY_INTERVAL_MS = 200;  // 日常回传最多 5 Hz；内部速度采样仍为约 50 Hz。
+#endif
 constexpr bool ARM_SERIAL_LOG = false;  // 默认关闭 BMV 手臂日志，避免挤占无线带宽。
 const drive::heading_config DRIVE_HEADING = drive::heading_config();
 const drive::velocity_pid_config DRIVE_VELOCITY_PID = drive::velocity_pid_config();

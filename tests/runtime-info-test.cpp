@@ -18,6 +18,9 @@ int main() {
 #if BARTMOSS_CALIBRATION
         assert(value.calibration.target_rpm == value.tick * 3.0);
 #endif
+#if BARTMOSS_HIGH_SPEED
+        assert(value.tuning.peak_rpm == value.tick * 4.0);
+#endif
         reads++;
       }
     } while (!finished.load());
@@ -29,6 +32,9 @@ int main() {
     value.dt = i * 0.5; value.test.request_deg = i + 1.0; value.test.corner.distance_mm = i * 2.0;
 #if BARTMOSS_CALIBRATION
     value.calibration.target_rpm = i * 3.0;
+#endif
+#if BARTMOSS_HIGH_SPEED
+    value.tuning.peak_rpm = i * 4.0;
 #endif
     PublishRuntimeInfo(value);
   }

@@ -1,4 +1,5 @@
 #include "test-config.h"
+#include "high-speed-config.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -10,7 +11,7 @@ struct fixture {
   drive::straight_feedback frame;
   double left = 0, right = 0;
   int now = 0;
-  explicit fixture(bool warm = true) {
+  explicit fixture(bool warm = true, bool route = false) {
     drive::straight_config s; s.motion.wheel_diameter_mm = 69.85; s.motion.motor_revs_per_wheel_rev = 1.2;
     s.left_forward.kS = 400; s.left_forward.kV = 16; s.left_forward.calibrated = true;
     s.right_forward = s.left_reverse = s.right_reverse = s.left_forward;
@@ -20,7 +21,8 @@ struct fixture {
     c.prediction_enabled = true; c.corner_rpm = 140; c.corner_floor_rpm = 100;
     c.angle_tolerance_deg = 1.5; c.exit_angle_tolerance_deg = 1.5;
     c.pid.kP = 20; c.pid.kI = 20; c.pid.max_correction = 2000; c.pid.max_integral = 1200;
-    Test.Configure(config::TestSettings(), s, t, c);
+    Test.Configure(route ? config::HighSpeedCornerSettings() : config::TestSettings(), s, t,
+                   route ? config::HighSpeedCornerControl(c) : c);
     if (warm) Step();
   }
   bool Step(bool allowed = true, int manual_left = 0, int fault = 0) {
@@ -49,6 +51,29 @@ struct fixture {
   }
 };
 int main() {
+  // 当前路线预设开机只选中圆角，不自动运动；两处衔接均保持前进输出。
+  for (int direction : {-1, 1}) {
+    fixture route(true, true);
+    assert(route.Test.Info().selected == test_motion::corner && !route.Test.Info().running);
+    route.Select(test_motion::corner, direction);
+    route.input.test_start = true;
+    bool phases[5] = {}; int previous_phase = 0, transitions = 0;
+    for (int i = 0; i < 1500; ++i) {
+      route.Step(); const auto& c = route.Test.Info().corner;
+      if (c.phase >= 1 && c.phase <= 4) phases[c.phase] = true;
+      if ((previous_phase == 1 && c.phase == 2) || (previous_phase == 2 && c.phase == 3)) {
+        assert(route.Test.Info().running && c.center_rpm > 0);
+        assert(route.output.L_voltage > 0 && route.output.R_voltage > 0); ++transitions;
+      }
+      previous_phase = c.phase;
+      if (!std::strcmp(route.Test.Info().status, "DONE")) break;
+    }
+    assert(!std::strcmp(route.Test.Info().status, "DONE") && transitions == 2);
+    assert(phases[1] && phases[2] && phases[3] && phases[4]);
+    assert(std::fabs(route.frame.heading_deg - direction * config::HIGH_SPEED_CORNER_DEG) <= 1.5);
+    assert(std::fabs(route.Test.Info().corner.remaining_mm) <= 5);
+    for (int i = 0; i < 30; ++i) { route.Step(); assert(!route.Test.Info().running); }
+  }
   fixture navigation;
   navigation.input.test_next = true;
   for (int i = 0; i < 100; ++i) navigation.Step();

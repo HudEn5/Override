@@ -3,6 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const HEADER = 'sequence,time_ms,dt_ms,left_mask,right_mask,acceleration_mask,left_raw_rpm,right_raw_rpm,left_rpm,right_rpm,left_accel_rpm_s,right_accel_rpm_s,left_actual_mV,right_actual_mV,LF_rpm,LM_rpm,LBD_rpm,LBU_rpm,RF_rpm,RM_rpm,RBD_rpm,RBU_rpm,dropped,command_valid,enabled,left_command_mV,right_command_mV,mode,target_rpm';
+export const TUNING_HEADER = 'sequence,time_ms,run,stage,direction,state,elapsed_ms,distance_mm,remaining_mm,peak_rpm,peak_heading_deg,speed_rms_rpm,high_voltage_ms,at_speed_ms,qualified';
+export const ROUTE_HEADER = 'sequence,time_ms,run,step,motion,active,finished,waiting,result';
+export const PUSH_HEADER = 'sequence,time_ms,elapsed_ms,duration_ms,left_command_mV,right_command_mV,state,settling,left_rpm,right_rpm';
 const BASE = 'ws://127.0.0.1:7071/vexrobotics.vexcode';
 export const MOTOR_HEADER = 'sequence,time_ms,LM_deg,LM_current_A,LF_deg,LF_current_A,diagnostic_mask';
 export const HEADING_HEADER = 'sequence,heading_time_ms,heading_deg,target_deg,error_deg,correction_mV,locked,ready,active';
@@ -11,6 +14,37 @@ export const PROFILE_HEADER = 'sequence,motion_time_ms,elapsed_ms,reference_mm,r
 export const QUALITY_HEADER = 'sequence,time_ms,left_rejected_mask,right_rejected_mask,left_encoder_valid,right_encoder_valid,left_encoder_rpm,right_encoder_rpm,left_sdk_valid,right_sdk_valid';
 export const TURN_HEADER = 'sequence,turn_time_ms,elapsed_ms,angle_deg,target_deg,error_deg,rate_deg_s,target_rpm,left_command_mV,right_command_mV,state';
 export const CORNER_HEADER = 'sequence,corner_time_ms,elapsed_ms,phase,state,distance_mm,remaining_mm,angle_deg,reference_deg,error_deg,rate_deg_s,center_rpm,left_target_rpm,right_target_rpm,left_command_mV,right_command_mV';
+
+// 字段数正确仍可能是串口错位。检查整数、标志和枚举，不将明显破损的数值写入 CSV。
+function validFields(kind, f) {
+  const integer = (i, min = 0, max = Number.MAX_SAFE_INTEGER) =>
+    /^-?\d+$/.test(f[i]) && Number.isSafeInteger(Number(f[i])) && Number(f[i]) >= min && Number(f[i]) <= max;
+  const flags = (...indices) => indices.every(i => f[i] === '0' || f[i] === '1');
+  const voltage = i => integer(i, -12000, 12000);
+  if (!integer(0) || Number(f[1]) < 0) return false;
+  switch (kind) {
+    case 'DSV': case 'DS2':
+      return Number(f[2]) >= 0 && integer(3, 0, 15) && integer(4, 0, 15) && integer(5, 0, 3) &&
+        integer(22) && flags(23, 24) && [12, 13, 25, 26].every(voltage) &&
+        (kind === 'DSV' || integer(27, 0, 8));
+    case 'DLM': return integer(6, 0, 3);
+    case 'DRA': return integer(2) && integer(3) && integer(4, 0, 4) && flags(5, 6, 7) &&
+      integer(8, 0, 4) && !(f[5] === '1' && f[6] === '1') && (f[7] === '0' || f[5] === '1');
+    case 'DPS': return Number(f[2]) >= 0 && Number(f[3]) >= 0 && Number(f[3]) <= 5000 &&
+      integer(4, 0, 12000) && integer(5, 0, 12000) && integer(6, 0, 4) && flags(7) &&
+      ((f[6] === '1' && f[7] === '0') || (f[4] === '0' && f[5] === '0'));
+    case 'DHD': return flags(6, 7, 8);
+    case 'DVL': return flags(8);
+    case 'DSQ': return integer(2, 0, 15) && integer(3, 0, 15) && flags(4, 5, 8, 9);
+    case 'DTP': return Number(f[2]) >= 0 && Number(f[8]) >= 0 && flags(9) && integer(10, 0, 7);
+    case 'DTN': return Number(f[2]) >= 0 && voltage(8) && voltage(9) && integer(10, 0, 4);
+    case 'DCR': return Number(f[2]) >= 0 && integer(3, 0, 4) && integer(4, 0, 4) && voltage(14) && voltage(15);
+    case 'DHS': return integer(2, 1) && integer(3, 1, 4) && ['-1', '1'].includes(f[4]) &&
+      integer(5, 0, 4) && [6, 9, 10, 11, 12, 13].every(i => Number(f[i]) >= 0) && flags(14) &&
+      (f[14] === '0' || (f[5] === '2' && Number(f[13]) >= 300));
+    default: return false;
+  }
+}
 
 // 串口数据可跨越多个 WebSocket 消息，必须拼成完整行后再解析。
 export class DriveLines {
@@ -24,13 +58,18 @@ export class DriveLines {
   qualities = 0;
   turns = 0;
   corners = 0;
-  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}, onProfile = () => {}, onQuality = () => {}, onTurn = () => {}, onCorner = () => {}) {
+  tuning = 0;
+  routes = 0;
+  pushes = 0;
+  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}, onProfile = () => {}, onQuality = () => {}, onTurn = () => {}, onCorner = () => {}, onTuning = () => {}, onRoute = () => {}, onPush = () => {}) {
     this.onSample = onSample; this.onDiagnostic = onDiagnostic; this.onHeading = onHeading;
     this.onVelocity = onVelocity;
     this.onProfile = onProfile;
     this.onQuality = onQuality;
     this.onTurn = onTurn;
-    this.onCorner = onCorner;
+    this.onCorner = onCorner; this.onTuning = onTuning;
+    this.onRoute = onRoute;
+    this.onPush = onPush;
   }
   push(text) {
     this.pending += text;
@@ -47,9 +86,27 @@ export class DriveLines {
       const quality = record.startsWith('DSQ,');
       const turn = record.startsWith('DTN,');
       const corner = record.startsWith('DCR,');
-      if (!legacy && !diagnostic && !heading && !velocity && !profile && !quality && !turn && !corner && !record.startsWith('DS2,')) { this.other++; continue; }
+      const tuning = record.startsWith('DHS,');
+      const route = record.startsWith('DRA,');
+      const push = record.startsWith('DPS,');
+      if (!legacy && !diagnostic && !heading && !velocity && !profile && !quality && !turn && !corner && !tuning && !route && !push && !record.startsWith('DS2,')) { this.other++; continue; }
       const fields = record.slice(4).split(',');
-      if (fields.length !== (corner ? 16 : (quality ? 10 : (profile || turn ? 11 : (heading || velocity ? 9 : (diagnostic ? 7 : (legacy ? 27 : 29)))))) || fields.some(x => !x.trim() || !Number.isFinite(Number(x)))) {
+      if (push) {
+        if (fields.length !== 10 || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields('DPS', fields)) this.malformed++;
+        else { this.pushes++; this.onPush(fields); }
+        continue;
+      }
+      if (route) {
+        if (fields.length !== 9 || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields('DRA', fields)) this.malformed++;
+        else { this.routes++; this.onRoute(fields); }
+        continue;
+      }
+      if (tuning) {
+        if (fields.length !== 15 || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields('DHS', fields)) this.malformed++;
+        else { this.tuning++; this.onTuning(fields); }
+        continue;
+      }
+      if (fields.length !== (corner ? 16 : (quality ? 10 : (profile || turn ? 11 : (heading || velocity ? 9 : (diagnostic ? 7 : (legacy ? 27 : 29)))))) || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields(record.slice(0, 3), fields)) {
         this.malformed++;
         continue;
       }
@@ -95,7 +152,7 @@ export async function capture(seconds) {
   const stem = path.join(directory, `drive-websocket-${Date.now()}`);
   // wx 防止覆盖已有的实测数据。原始日志保留不完整行，便于定位传输问题。
   const csv = fs.openSync(`${stem}.csv`, 'wx');
-  let raw, motors, headings, velocities, profiles, quality, turns, corners;
+  let raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes;
   try {
     raw = fs.openSync(`${stem}.log`, 'wx');
     motors = fs.openSync(`${stem}-motors.csv`, 'wx');
@@ -112,21 +169,31 @@ export async function capture(seconds) {
     fs.writeSync(turns, `${TURN_HEADER}\n`);
     corners = fs.openSync(`${stem}-corner.csv`, 'wx');
     fs.writeSync(corners, `${CORNER_HEADER}\n`);
+    tuning = fs.openSync(`${stem}-tuning.csv`, 'wx');
+    fs.writeSync(tuning, `${TUNING_HEADER}\n`);
+    routes = fs.openSync(`${stem}-route.csv`, 'wx');
+    fs.writeSync(routes, `${ROUTE_HEADER}\n`);
+    pushes = fs.openSync(`${stem}-push.csv`, 'wx');
+    fs.writeSync(pushes, `${PUSH_HEADER}\n`);
   } catch (error) {
-    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners]) if (fd !== undefined) fs.closeSync(fd);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes]) if (fd !== undefined) fs.closeSync(fd);
     throw error;
   }
-  let samples = 0, bytes = 0, latest, latestQuality, connected = false;
+  let samples = 0, bytes = 0, latest, latestQuality, latestTuning, latestVelocity, latestCorner, latestRoute, connected = false;
+  let latestProfile, latestTurn, latestPush, latestKind = '', latestMotionSequence = -1;
   const parser = new DriveLines(fields => {
     fs.writeSync(csv, `${fields.join(',')}\n`);
     samples++; latest = fields;
   }, fields => fs.writeSync(motors, `${fields.join(',')}\n`),
   fields => fs.writeSync(headings, `${fields.join(',')}\n`),
-  fields => fs.writeSync(velocities, `${fields.join(',')}\n`),
-  fields => fs.writeSync(profiles, `${fields.join(',')}\n`),
+  fields => { fs.writeSync(velocities, `${fields.join(',')}\n`); latestVelocity = fields; },
+  fields => { fs.writeSync(profiles, `${fields.join(',')}\n`); latestProfile = fields; latestKind = 'straight'; latestMotionSequence = Number(fields[0]); },
   fields => { fs.writeSync(quality, `${fields.join(',')}\n`); latestQuality = fields; },
-  fields => fs.writeSync(turns, `${fields.join(',')}\n`),
-  fields => fs.writeSync(corners, `${fields.join(',')}\n`));
+  fields => { fs.writeSync(turns, `${fields.join(',')}\n`); latestTurn = fields; latestKind = 'turn'; latestMotionSequence = Number(fields[0]); },
+  fields => { fs.writeSync(corners, `${fields.join(',')}\n`); latestCorner = fields; latestKind = 'corner'; latestMotionSequence = Number(fields[0]); },
+  fields => { fs.writeSync(tuning, `${fields.join(',')}\n`); latestTuning = fields; latestKind = 'tuning'; latestMotionSequence = Number(fields[0]); },
+  fields => { fs.writeSync(routes, `${fields.join(',')}\n`); latestRoute = fields; },
+  fields => { fs.writeSync(pushes, `${fields.join(',')}\n`); latestPush = fields; latestKind = 'push'; latestMotionSequence = Number(fields[0]); });
   fs.writeSync(csv, `${HEADER}\n`);
   console.log(`只读采集 ${seconds}s，设备 ${device.platform} ${device.device}，VS Code ID=${device.instanceId}`);
   console.log(`CSV: ${stem}.csv`);
@@ -137,6 +204,9 @@ export async function capture(seconds) {
   console.log(`SDK 异常掩码和编码器差分速度: ${stem}-quality.csv`);
   console.log(`转向角度、角速度、轮速目标和状态: ${stem}-turn.csv`);
   console.log(`连续圆角阶段、距离、航向和两侧目标: ${stem}-corner.csv`);
+  console.log(`高速整定指标与终态: ${stem}-tuning.csv`);
+  console.log(`自动路线步骤、等待与结果: ${stem}-route.csv`);
+  console.log(`定时前推电压、计时和停稳: ${stem}-push.csv`);
   try {
     await new Promise((resolve, reject) => {
       const ws = new WebSocket(`${BASE}/device?id=${encodeURIComponent(device.instanceId)}`);
@@ -155,11 +225,42 @@ export async function capture(seconds) {
       const stop = () => finish();
       const connectTimer = setTimeout(() => finish(new Error('连接设备数据通道超时')), 5000);
       const status = setInterval(() => {
+        if (latestRoute && Number(latestRoute[0]) >= latestMotionSequence) {
+          const a = latestRoute;
+          console.log(`ROUTE run=${a[2]} step=${a[3]} ${a[7] === '1' ? 'WAIT' : ['READY','RUN','DONE','CANCEL','FAULT'][a[8]]}；路线=${parser.routes}，圆角=${parser.corners}，规划=${parser.profiles}，转向=${parser.turns}，坏行=${parser.malformed}，接收=${bytes} 字节`);
+          return;
+        }
+        if (latestKind === 'corner' && latestCorner) {
+          const c = latestCorner;
+          console.log(`CNR ${['READY','RUN','DONE','CANCEL','FAULT'][c[4]]} 阶段=${c[3]}；角度=${c[7]}° 参考=${c[8]}° 误差=${c[9]}°，剩余=${c[6]} mm；圆角=${parser.corners}，坏行=${parser.malformed}，接收=${bytes} 字节`);
+          return;
+        }
+        if (latestKind === 'tuning' && latestTuning) {
+          const h = latestTuning;
+          const speed = latestVelocity ? `L=${(Number(latestVelocity[2]) - Number(latestVelocity[4])).toFixed(1)} R=${(Number(latestVelocity[3]) - Number(latestVelocity[5])).toFixed(1)} rpm` : '等待速度曲线';
+          console.log(`H${h[3]} run=${h[2]} ${h[4] === '1' ? '前进' : '后退'} ${['READY','RUN','DONE','CANCEL','FAULT'][h[5]]}；${speed}；峰值=${h[9]} rpm，航向峰值=${h[10]}°；汇总=${parser.tuning}，坏行=${parser.malformed}，接收=${bytes} 字节`);
+          return;
+        }
+        if (latestKind === 'straight' && latestProfile) {
+          const p = latestProfile;
+          console.log(`STR ${['READY','ACCEL','CRUISE','DECEL','SETTLE','DONE','CANCEL','FAULT'][p[10]]}；距离=${p[5]} mm 剩余=${p[7]} mm 目标=${p[6]} rpm；规划=${parser.profiles}，坏行=${parser.malformed}`);
+          return;
+        }
+        if (latestKind === 'turn' && latestTurn) {
+          const t = latestTurn;
+          console.log(`TURN ${['READY','RUN','DONE','CANCEL','FAULT'][t[10]]}；角度=${t[3]}° 目标=${t[4]}° 误差=${t[5]}°；转向=${parser.turns}，坏行=${parser.malformed}`);
+          return;
+        }
+        if (latestKind === 'push' && latestPush) {
+          const p = latestPush;
+          console.log(`PUSH ${p[7] === '1' ? 'SETTLE' : ['READY','RUN','DONE','CANCEL','FAULT'][p[6]]}；${p[2]}/${p[3]} ms，L=${p[4]} R=${p[5]} mV；前推=${parser.pushes}，坏行=${parser.malformed}`);
+          return;
+        }
         const encoder = ['3', '6', '7', '8'].includes(latest?.[27]);
         const aligned = latestQuality && latestQuality[0] === latest?.[0];
         const left = encoder ? (aligned && latestQuality[4] === '1' ? latestQuality[6] : '--') : latest?.[8];
         const right = encoder ? (aligned && latestQuality[5] === '1' ? latestQuality[7] : '--') : latest?.[9];
-        const values = latest ? `L=${left} R=${right} rpm（${encoder ? '编码器差分' : 'SDK滤波'}），在线掩码=${latest[3]}/${latest[4]}，模式=${['手控','固定电压','前馈','A原地转向','前馈+航向','前馈+航向+速度PID','TP梯形规划','比赛自动','B连续圆角'][latest[27]] ?? '旧版'} T=${latest[28]}rpm` : '尚无速度采样；请确认遥控器 LOG:ON（Y 切换）';
+        const values = latest ? `L=${left} R=${right} rpm（${encoder ? '编码器差分' : 'SDK滤波'}），在线掩码=${latest[3]}/${latest[4]}，模式=${['手控','固定电压','前馈','原地转向','前馈+航向','前馈+航向+速度PID','距离直行','比赛自动','连续圆角'][latest[27]] ?? '旧版'} T=${latest[28]}rpm` : '尚无速度采样；请确认遥控器 LOG:ON（Y 切换）';
         console.log(`${values}；样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，质量=${parser.qualities}，接收=${bytes} 字节`);
       }, 5000);
       process.once('SIGINT', stop);
@@ -181,12 +282,13 @@ export async function capture(seconds) {
       ws.onclose = () => finish(new Error('设备数据通道提前关闭；检查 VS Code 设备选择和连接'));
     });
   } finally {
-    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners]) fs.closeSync(fd);
-    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，质量=${parser.qualities}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes]) fs.closeSync(fd);
+    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，质量=${parser.qualities}，转向=${parser.turns}，圆角=${parser.corners}，高速汇总=${parser.tuning}，路线=${parser.routes}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
   }
-  if (!samples) throw new Error(bytes ? '收到输出，但没有完整速度数据；请确认运行的是包含底盘采样的 Bartmoss' : '没有收到样本；请确认 Bartmoss 运行中、LOG:ON 和无线连接正常');
-  if (!parser.diagnostics) console.log('未收到 LM/LF 角度、电流记录；仅有速度数据，不能完成电机交叉诊断。');
-  return { samples, bytes, diagnostics: parser.diagnostics };
+  if (!samples && !parser.pushes && !parser.routes && !parser.tuning && !parser.corners && !parser.turns && !parser.profiles) throw new Error(bytes ? '收到输出，但没有完整运动数据；请确认运行的是包含底盘采样的 Bartmoss' : '没有收到样本；请确认 Bartmoss 运行中、LOG:ON 和无线连接正常');
+  if (!samples) console.log('精简回传：速度由 velocity.csv 的目标减误差获得；基础速度和电机诊断 CSV 仅有表头。');
+  else if (!parser.diagnostics) console.log('未收到 LM/LF 角度、电流记录；仅有速度数据，不能完成电机交叉诊断。');
+  return { samples, bytes, diagnostics: parser.diagnostics, tuning: parser.tuning, corners: parser.corners, turns: parser.turns, profiles: parser.profiles, routes: parser.routes, pushes: parser.pushes };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
