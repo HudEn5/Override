@@ -66,13 +66,15 @@ inline drive::turn_config RouteTurnControl(const drive::turn_config& baseline) {
     result.profile_enabled = TURN_ANGULAR_PROFILE;
     if (TURN_ANGULAR_PROFILE) {
       result.kP = 3.0; result.kD = .10;  // 跟踪规划角度/角速度，末端继续纠偏。
-      result.angular_acceleration_deg_s2 = 900;
-      result.angular_deceleration_deg_s2 = 1200;
-      result.profile_braking_delay_ms = 120;
+      // 原900/1200配120ms预留容易提前掉速；让减速更早、更连续，减少尾段再起步。
+      result.angular_acceleration_deg_s2 = 1200;
+      result.angular_deceleration_deg_s2 = 1000;
+      result.profile_braking_delay_ms = 100;
+      result.rate_filter_ms = 20;  // 原60ms会延迟减速反馈与零速识别，保留短滤波抑制量化。
       result.profile_finish_kP = TURN_FAST_FINISH ? 6.0 : 0;
-      // 补角最低转速在32°/s以下完整保留，64°/s以上退出；只在参考结束后生效。
-      result.minimum_rate_deg_s = TURN_FAST_FINISH ? 32 : 16;
-      result.minimum_settle_rpm = TURN_FAST_FINISH ? 50 : 30;
+      // 原32°/s门槛会在减速中先撤掉低速补偿、随后再加回；扩大平滑过渡避免尾段掉速。
+      result.minimum_rate_deg_s = TURN_FAST_FINISH ? 48 : 16;
+      result.minimum_settle_rpm = TURN_FAST_FINISH ? 60 : 30;
       result.minimum_finish_rpm = TURN_FAST_FINISH ? 30 : 24;
     }
   }
