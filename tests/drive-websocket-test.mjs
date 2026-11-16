@@ -186,3 +186,21 @@ for (const [index,value] of [[3,'5001'],[4,'12001'],[5,'-1'],[6,'5'],[7,'1']]) {
 }
 assert.equal(pushParser.malformed,5); assert.equal(pushParser.pushes,2);
 console.log('Push protocol checks passed: stalled force/settle fragments, route motion=4 and invalid duration/voltage/state rejection.');
+
+const poseRows = [];
+const poseParser = new DriveLines(...Array(12).fill(() => {}), row => poseRows.push(row));
+const poseRecords = [
+  ['0','0','0','0','0','0','0'],
+  ['1','500','-123.45','678.90','361.25','1','0'],
+  ['2','500','-123.45','678.90','361.25','0','1'],
+];
+const poseStream = poseRecords.map(row => `DPO,${row.join(',')}\n`).join('');
+for (let i = 0; i < poseStream.length; i += 3) poseParser.push(poseStream.slice(i, i + 3));
+assert.deepEqual(poseRows, poseRecords);
+for (const [index, value] of [[0,'-1'],[1,'-1'],[2,'NaN'],[5,'2'],[6,'1']]) {
+  const bad = [...poseRecords[1]]; bad[index] = value;
+  poseParser.push(`DPO,${bad.join(',')}\n`);
+}
+poseParser.push('DPO,3,600,1,2,3,1\n');
+assert.equal(poseParser.poses, 3); assert.equal(poseParser.malformed, 6);
+console.log('Pose protocol passed: fragmented WAIT/OK/RESET, signed coordinates, invalid flags and truncated rows.');

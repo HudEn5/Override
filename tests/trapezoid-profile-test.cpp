@@ -1,4 +1,4 @@
-#include "trapezoid-profile.h"
+#include "trapezoid-motion.h"
 #include <initializer_list>
 #include <cassert>
 #include <cstdio>

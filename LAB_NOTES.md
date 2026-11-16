@@ -1,6 +1,6 @@
 # 实验室调试记录
 
-当前程序是 Bartmoss v1.6.0-tests，八电机底盘、双臂直接电压控制。
+当前已发布基线为 Bartmoss 2.0.6-route3；feat/odometry 开发版为2.1.0-odom1，八电机底盘、双臂直接电压控制。
 硬件端口和控制参数以 `include/control-config.h` 为准，手柄操作见 `README.md`。
 环境准备、编译通过和实车验证分别记录，实车测试结果见下文。
 
@@ -984,3 +984,16 @@
 - fetch核对HEAD与origin/main均62e96e3且无分叉，保留本地所有修改；.vscode/c_cpp_properties.json原有末尾换行改动不纳入提交。
 - 当前路线/原地转向/圆角参数与主循环电机写入方式保持原样；构建产物、数据和本地备份不进入Git。
 - 基线完整宿主机回归、协议检查、SDK构建与暂存内容检查完成后正常推送main；后续在独立位姿开发分支工作，主分支作为冻结参照。
+
+
+## 2026-11-17：发布基线，位姿推算与头文件精简
+
+- 按用户要求先发布原控制基线：main提交92eba1f0ec2c7923323be5330e8f5db8ef05f707已推送，ls-remote核对一致；随后切到本地feat/odometry开发。新功能不覆盖main。
+- 头文件由30精简到20：速度PID与航向保持合入drive-velocity.h，梯形参考合入trapezoid-motion.h，圆角预测合入drive-corner.h，运动预设合入performance-config.h，模式许可合入startup-mode.h，定时前推/路线命令合入autonomous.h，三类测试参数合入test-config.h。旧文件删除，全部引用及当前文档同步；17份合并文件的非include/pragma正文逐段检查原样保留。
+- 位姿接口放在drive-control.h，实现仅新增src/odometry.cpp。主循环复用原左右编码器平均位置与4号口连续IMU角度：中心弧长＋半角sinc修正；坐标mm、X初始前、Y初始左、朝向逆时针为正。启动首组完整反馈设传感器基准，SetPose只调整估计坐标，不重置硬件或原动作航向。
+- 主控屏显示XYH及WAIT/OK/RESET；遥控器保持原布局。DPO与原按需LOG同频，高速2Hz，接收脚本增加-pose.csv，未新增线程或独立快照锁。runtime_info现有mutex覆盖位姿整包复制。
+- 已跟踪后反馈丢失/明显跳变/时间倒退/间隔超过200ms会冻结最后可信位姿与时间并锁存需重置，通信恢复不能自动宣称有效；在已知位置SetPose后下一帧重建基准。跳变门槛给SDK缓存留20ms余量，600rpm、20ms刷新/10ms调用模型通过。
+- 位姿只旁路观测，不改路线、控制器输出、端口、方向、增益、速度/加减速或场控权限；当前不实现MoveToPoint。轮子打滑/搬动车体/碰撞造成的位置漂移无法靠IMU消除，PushFor不自动归零。
+- 验证：完整33个C++宿主机程序通过（含新增位姿数学、失效恢复和三种运行快照并发）；Node遥测全协议与DPO分片/状态/坏行检查通过；Test/Competition/Calibration/HighSpeed/Default五种SDK重编译均通过，Default最后构建。git diff --check通过。
+- 初轮并发运行宿主机脚本曾发生链接器异常，改为单次顺序完整运行；新增并发测试还发现断言对unsigned tick取负导致期望值溢出，修正断言为浮点乘法后取负，整套重新通过。未改变mutex实现或放宽一致性断言。
+- 未下载、未运行实车。保留已验证的vex_project_settings描述与下载工具，由用户自行通过VS Code下载。实车下一步：静止→手动前后→原地转向→测量路线终点，核对坐标方向、漂移和有效状态；软件通过不代表实车定位精度已经验证。

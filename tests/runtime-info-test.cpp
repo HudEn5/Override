@@ -15,6 +15,8 @@ int main() {
         assert(value.output.R_voltage == -static_cast<int>(value.tick));
         assert(value.dt == value.tick * 0.5 && value.test.request_deg == value.tick + 1.0);
         assert(value.test.corner.distance_mm == value.tick * 2.0);
+        assert(value.pose.x_mm==value.tick*5.0 && value.pose.y_mm==-(value.tick*2.0));
+        assert(value.pose.heading_deg==value.tick*.25 && value.pose.valid && !value.pose.needs_reset);
 #if BARTMOSS_CALIBRATION
         assert(value.calibration.target_rpm == value.tick * 3.0);
 #endif
@@ -30,6 +32,8 @@ int main() {
     runtime_info value; value.configured = true; value.tick = i;
     value.output.L_voltage = i; value.output.R_voltage = -static_cast<int>(i);
     value.dt = i * 0.5; value.test.request_deg = i + 1.0; value.test.corner.distance_mm = i * 2.0;
+    value.pose.x_mm=i*5.0;value.pose.y_mm=-static_cast<double>(i)*2;
+    value.pose.heading_deg=i*.25;value.pose.valid=true;
 #if BARTMOSS_CALIBRATION
     value.calibration.target_rpm = i * 3.0;
 #endif

@@ -6,11 +6,11 @@
 高速环境提供直行整定和连续圆角测试预设，共用底层控制器。
 
 开机菜单A自动、B手动、X测试。A执行 `src/route.cpp`，X进入本页参数测试，见 [启动模式](STARTUP_MODES.md)。
-高速参数共同来源为 `include/motion-presets.h`。
+高速参数共同来源为 `include/performance-config.h`。
 
 ## 当前预设：直行接逆时针 90° 再直行
 
-`include/high-speed-config.h` 的 `HIGH_SPEED_CORNER_TEST = true` 时，X测试默认选中 CNR +90°：
+`include/test-config.h` 的 `HIGH_SPEED_CORNER_TEST = true` 时，X测试默认选中 CNR +90°：
 前进 500 mm → 连续逆时针圆角 90° → 沿新方向前进 500 mm，最后停稳。
 直线距离指圆角切点前后长度，另有圆角路径长度；不代表整条路线只有 1000 mm。
 保留原圆角控制、250 mm 参考最小曲率半径、325 mm 轮距与控制增益，不使用新 H4 的位置增益。
@@ -56,7 +56,7 @@ DONE 后至少等待 1 秒，确保终态已传回；测试过程中不要因进
 
 ## 档位
 
-参数集中在 `include/high-speed-config.h`。距离为单段行程，正/负方向由手柄选择。
+参数集中在 `include/test-config.h`。距离为单段行程，正/负方向由手柄选择。
 
 | 档位 | 距离 | 目标峰值 | 约合线速度 | 加速 / 减速 | 位置增益 / 纠偏上限 |
 | --- | --- | --- | --- | --- | --- |

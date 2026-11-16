@@ -14,6 +14,7 @@ export const PROFILE_HEADER = 'sequence,motion_time_ms,elapsed_ms,reference_mm,r
 export const QUALITY_HEADER = 'sequence,time_ms,left_rejected_mask,right_rejected_mask,left_encoder_valid,right_encoder_valid,left_encoder_rpm,right_encoder_rpm,left_sdk_valid,right_sdk_valid';
 export const TURN_HEADER = 'sequence,turn_time_ms,elapsed_ms,angle_deg,target_deg,error_deg,rate_deg_s,target_rpm,left_command_mV,right_command_mV,state';
 export const TURN_PROFILE_HEADER = 'sequence,turn_time_ms,elapsed_ms,reference_deg,reference_rate_deg_s,duration_ms,peak_rate_deg_s,phase,tracking_error_deg';
+export const POSE_HEADER = 'sequence,pose_time_ms,x_mm,y_mm,heading_deg,valid,needs_reset';
 export const CORNER_HEADER = 'sequence,corner_time_ms,elapsed_ms,phase,state,distance_mm,remaining_mm,angle_deg,reference_deg,error_deg,rate_deg_s,center_rpm,left_target_rpm,right_target_rpm,left_command_mV,right_command_mV';
 
 // 字段数正确仍可能是串口错位。检查整数、标志和枚举，不将明显破损的数值写入 CSV。
@@ -40,6 +41,7 @@ function validFields(kind, f) {
     case 'DTP': return Number(f[2]) >= 0 && Number(f[8]) >= 0 && flags(9) && integer(10, 0, 7);
     case 'DTN': return Number(f[2]) >= 0 && voltage(8) && voltage(9) && integer(10, 0, 4);
     case 'DTA': return Number(f[2]) >= 0 && Number(f[5]) >= 0 && Number(f[6]) >= 0 && integer(7, 0, 4);
+    case 'DPO': return flags(5,6) && !(f[5]==='1' && f[6]==='1');
     case 'DCR': return Number(f[2]) >= 0 && integer(3, 0, 4) && integer(4, 0, 4) && voltage(14) && voltage(15);
     case 'DHS': return integer(2, 1) && integer(3, 1, 4) && ['-1', '1'].includes(f[4]) &&
       integer(5, 0, 4) && [6, 9, 10, 11, 12, 13].every(i => Number(f[i]) >= 0) && flags(14) &&
@@ -64,7 +66,8 @@ export class DriveLines {
   routes = 0;
   pushes = 0;
   turnProfiles = 0;
-  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}, onProfile = () => {}, onQuality = () => {}, onTurn = () => {}, onCorner = () => {}, onTuning = () => {}, onRoute = () => {}, onPush = () => {}, onTurnProfile = () => {}) {
+  poses = 0;
+  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}, onProfile = () => {}, onQuality = () => {}, onTurn = () => {}, onCorner = () => {}, onTuning = () => {}, onRoute = () => {}, onPush = () => {}, onTurnProfile = () => {}, onPose = () => {}) {
     this.onSample = onSample; this.onDiagnostic = onDiagnostic; this.onHeading = onHeading;
     this.onVelocity = onVelocity;
     this.onProfile = onProfile;
@@ -74,6 +77,7 @@ export class DriveLines {
     this.onRoute = onRoute;
     this.onPush = onPush;
     this.onTurnProfile = onTurnProfile;
+    this.onPose = onPose;
   }
   push(text) {
     this.pending += text;
@@ -94,8 +98,14 @@ export class DriveLines {
       const route = record.startsWith('DRA,');
       const push = record.startsWith('DPS,');
       const turnProfile = record.startsWith('DTA,');
-      if (!legacy && !diagnostic && !heading && !velocity && !profile && !quality && !turn && !corner && !tuning && !route && !push && !turnProfile && !record.startsWith('DS2,')) { this.other++; continue; }
+      const pose = record.startsWith('DPO,');
+      if (!legacy && !diagnostic && !heading && !velocity && !profile && !quality && !turn && !corner && !tuning && !route && !push && !turnProfile && !pose && !record.startsWith('DS2,')) { this.other++; continue; }
       const fields = record.slice(4).split(',');
+      if (pose) {
+        if (fields.length !== 7 || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields('DPO', fields)) this.malformed++;
+        else { this.poses++; this.onPose(fields); }
+        continue;
+      }
       if (turnProfile) {
         if (fields.length !== 9 || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields('DTA', fields)) this.malformed++;
         else { this.turnProfiles++; this.onTurnProfile(fields); }
@@ -162,7 +172,7 @@ export async function capture(seconds) {
   const stem = path.join(directory, `drive-websocket-${Date.now()}`);
   // wx 防止覆盖已有的实测数据。原始日志保留不完整行，便于定位传输问题。
   const csv = fs.openSync(`${stem}.csv`, 'wx');
-  let raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles;
+  let raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses;
   try {
     raw = fs.openSync(`${stem}.log`, 'wx');
     motors = fs.openSync(`${stem}-motors.csv`, 'wx');
@@ -187,12 +197,14 @@ export async function capture(seconds) {
     fs.writeSync(pushes, `${PUSH_HEADER}\n`);
     turnProfiles = fs.openSync(`${stem}-turn-profile.csv`, 'wx');
     fs.writeSync(turnProfiles, `${TURN_PROFILE_HEADER}\n`);
+    poses = fs.openSync(`${stem}-pose.csv`, 'wx');
+    fs.writeSync(poses, `${POSE_HEADER}\n`);
   } catch (error) {
-    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles]) if (fd !== undefined) fs.closeSync(fd);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses]) if (fd !== undefined) fs.closeSync(fd);
     throw error;
   }
   let samples = 0, bytes = 0, latest, latestQuality, latestTuning, latestVelocity, latestCorner, latestRoute, connected = false;
-  let latestProfile, latestTurn, latestPush, latestKind = '', latestMotionSequence = -1;
+  let latestPose, latestProfile, latestTurn, latestPush, latestKind = '', latestMotionSequence = -1;
   const parser = new DriveLines(fields => {
     fs.writeSync(csv, `${fields.join(',')}\n`);
     samples++; latest = fields;
@@ -206,7 +218,8 @@ export async function capture(seconds) {
   fields => { fs.writeSync(tuning, `${fields.join(',')}\n`); latestTuning = fields; latestKind = 'tuning'; latestMotionSequence = Number(fields[0]); },
   fields => { fs.writeSync(routes, `${fields.join(',')}\n`); latestRoute = fields; },
   fields => { fs.writeSync(pushes, `${fields.join(',')}\n`); latestPush = fields; latestKind = 'push'; latestMotionSequence = Number(fields[0]); },
-  fields => fs.writeSync(turnProfiles, `${fields.join(',')}\n`));
+  fields => fs.writeSync(turnProfiles, `${fields.join(',')}\n`),
+  fields => { fs.writeSync(poses, `${fields.join(',')}\n`); latestPose = fields; });
   fs.writeSync(csv, `${HEADER}\n`);
   console.log(`只读采集 ${seconds}s，设备 ${device.platform} ${device.device}，VS Code ID=${device.instanceId}`);
   console.log(`CSV: ${stem}.csv`);
@@ -217,6 +230,7 @@ export async function capture(seconds) {
   console.log(`SDK 异常掩码和编码器差分速度: ${stem}-quality.csv`);
   console.log(`转向角度、角速度、轮速目标和状态: ${stem}-turn.csv`);
   console.log(`角速度规划参考、阶段及跟踪误差: ${stem}-turn-profile.csv`);
+  console.log(`编码器与IMU位姿推算: ${stem}-pose.csv`);
   console.log(`连续圆角阶段、距离、航向和两侧目标: ${stem}-corner.csv`);
   console.log(`高速整定指标与终态: ${stem}-tuning.csv`);
   console.log(`自动路线步骤、等待与结果: ${stem}-route.csv`);
@@ -270,6 +284,11 @@ export async function capture(seconds) {
           console.log(`PUSH ${p[7] === '1' ? 'SETTLE' : ['READY','RUN','DONE','CANCEL','FAULT'][p[6]]}；${p[2]}/${p[3]} ms，L=${p[4]} R=${p[5]} mV；前推=${parser.pushes}，坏行=${parser.malformed}`);
           return;
         }
+        if (!latest && latestPose) {
+          const p = latestPose;
+          console.log(`POSE X=${p[2]} Y=${p[3]} mm H=${p[4]}° ${p[6] === '1' ? 'RESET' : p[5] === '1' ? 'OK' : 'WAIT'}；位姿=${parser.poses}，坏行=${parser.malformed}`);
+          return;
+        }
         const encoder = ['3', '6', '7', '8'].includes(latest?.[27]);
         const aligned = latestQuality && latestQuality[0] === latest?.[0];
         const left = encoder ? (aligned && latestQuality[4] === '1' ? latestQuality[6] : '--') : latest?.[8];
@@ -296,13 +315,13 @@ export async function capture(seconds) {
       ws.onclose = () => finish(new Error('设备数据通道提前关闭；检查 VS Code 设备选择和连接'));
     });
   } finally {
-    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles]) fs.closeSync(fd);
-    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，质量=${parser.qualities}，转向=${parser.turns}，圆角=${parser.corners}，高速汇总=${parser.tuning}，路线=${parser.routes}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses]) fs.closeSync(fd);
+    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，质量=${parser.qualities}，转向=${parser.turns}，圆角=${parser.corners}，高速汇总=${parser.tuning}，路线=${parser.routes}，位姿=${parser.poses}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
   }
-  if (!samples && !parser.pushes && !parser.routes && !parser.tuning && !parser.corners && !parser.turns && !parser.profiles) throw new Error(bytes ? '收到输出，但没有完整运动数据；请确认运行的是包含底盘采样的 Bartmoss' : '没有收到样本；请确认 Bartmoss 运行中、LOG:ON 和无线连接正常');
-  if (!samples) console.log('精简回传：速度由 velocity.csv 的目标减误差获得；基础速度和电机诊断 CSV 仅有表头。');
+  if (!samples && !parser.poses && !parser.pushes && !parser.routes && !parser.tuning && !parser.corners && !parser.turns && !parser.profiles) throw new Error(bytes ? '收到输出，但没有完整运动数据；请确认运行的是包含底盘采样的 Bartmoss' : '没有收到样本；请确认 Bartmoss 运行中、LOG:ON 和无线连接正常');
+  if (!samples && latestVelocity) console.log('精简回传：速度由 velocity.csv 的目标减误差获得；基础速度和电机诊断 CSV 仅有表头。');
   else if (!parser.diagnostics) console.log('未收到 LM/LF 角度、电流记录；仅有速度数据，不能完成电机交叉诊断。');
-  return { samples, bytes, diagnostics: parser.diagnostics, tuning: parser.tuning, corners: parser.corners, turns: parser.turns, turnProfiles: parser.turnProfiles, profiles: parser.profiles, routes: parser.routes, pushes: parser.pushes };
+  return { samples, bytes, diagnostics: parser.diagnostics, tuning: parser.tuning, corners: parser.corners, turns: parser.turns, turnProfiles: parser.turnProfiles, profiles: parser.profiles, routes: parser.routes, pushes: parser.pushes, poses: parser.poses };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

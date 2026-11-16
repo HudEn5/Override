@@ -10,40 +10,34 @@
 
 ## 文件职责
 
+`include` 共20个头文件，按功能合并，移除旧文件而不保留转发空壳。相关数学实现留在所属模块，避免每个结构和小配置单独占一个文件。
+
 | 文件 | 职责 |
 | --- | --- |
-| src/main.cpp | 初始化、权限判断、反馈组装、统一输出与状态发布 |
-| include/control-config.h | 硬件、手控电压、三种公共控制器和环境宏 |
-| include/test-config.h | 日常直行/转向/圆角的距离、角度、最高速度 |
-| include/calibration-config.h | 独立标定档位、长按时间和运行超时 |
-| include/robot-config.h、src/robot-config.cpp | 硬件初始化、手柄/传感器读取和电压执行 |
-| include/driver-control-logic.h | 底盘摇杆混控、双臂电压、夹爪、气动 |
-| include/test-control.h、src/test-control.cpp | 统一三项测试，选择/开始/取消及完成锁存 |
-| include/calibration-control.h | 仅 CAL 使用的 VTEST/FH/SP 三种诊断 |
-| include/program-mode.h | TEST/CAL/COMP 的手控、诊断、自动与回传许可 |
-| include/competition-control.h、src/competition-control.cpp | 用 mutex 发布比赛阶段回调 |
-| include/autonomous.h、src/autonomous.cpp | 比赛动作调度、互斥执行及生命周期 |
-| src/route.cpp | 调试与比赛共用的顺序动作表 |
-| include/route-commands.h | 直行、相对/绝对转向、圆角、Wait命令与默认速度 |
-| include/startup-mode.h | 无场控A自动/B手动/X测试选择、松键门控、返回菜单与场控权限交接 |
-| include/motion-presets.h | 路线与高速测试共用的H3/高速圆角参数副本 |
-| include/drive-control.h | 反馈结构、编码器差分测速、异常过滤和电机前馈 |
-| include/drive-sampling.h、src/drive-sampling.cpp | 约 50 Hz 采样、最新反馈、带锁回传队列 |
-| include/velocity-control.h | 单侧速度 PID 数学计算及抗饱和 |
-| include/drive-velocity.h | 左右/正反向前馈与速度 PID 的公共执行层 |
-| include/heading-control.h | 直行航向保持 |
-| include/trapezoid-profile.h | 梯形位置/速度参考与速度变化限制 |
-| include/trapezoid-motion.h | 距离闭环、梯形执行及终点停稳 |
-| include/drive-straight.h | 距离/最高速度的公共直行控制器 |
-| include/drive-turn.h | 相对转向和绝对朝向的公共原地转向控制器 |
-| include/performance-config.h | 实验速度副本、原地角速度规划开关及独立角加减速 |
-| include/drive-corner.h | 连续直行/圆角/直行的公共控制器 |
-| include/drive-push.h | 固定电压定时前推、撤电压后停稳及故障保护 |
-| include/corner-profile.h | 基于曲率变化和左右轮能力的提前速度规划 |
-| include/runtime-info.h、src/runtime-info.cpp | 主循环/显示/回传间的整包状态快照及 mutex |
-| src/display.cpp | 主控和遥控器显示，不调用动作控制器 |
-| src/telemetry.cpp | 唯一串口打印线程及原有数据协议 |
-| include/vex.h | VEX SDK 头文件入口 |
+| control-config.h | 硬件、手控电压、底盘几何、公共控制器配置和构建模式 |
+| performance-config.h | 共用运动预设、高速实验参数与自动交接参数 |
+| test-config.h | 普通测试、高速整定、独立标定的全部档位与设置 |
+| robot-config.h | 硬件初始化、反馈读取与电压执行 |
+| driver-control-logic.h | 摇杆混控、机械臂、夹爪和气动 |
+| drive-control.h | 反馈结构、差分测速、异常过滤、前馈及位姿接口 |
+| drive-sampling.h | 采样、反馈快照与带锁回传队列 |
+| drive-velocity.h | 单侧速度PID、双侧执行层和航向保持 |
+| trapezoid-motion.h | 梯形参考、速度限制、距离闭环与停稳 |
+| drive-straight.h | 公共直行控制器 |
+| drive-turn.h | 相对转角、绝对航向与角速度规划跟踪 |
+| drive-corner.h | 曲率与轮速预测规划、连续圆角控制器 |
+| autonomous.h | 路线命令、动作调度和定时前推控制器 |
+| test-control.h | 普通测试的选择、启动、取消和完成锁存 |
+| high-speed-control.h | 高速整定流程与指标 |
+| calibration-control.h | 独立标定的VTEST/FH/SP流程 |
+| startup-mode.h | 模式权限、启动菜单、松键门控与场控交接 |
+| competition-control.h | 带mutex的比赛回调快照 |
+| runtime-info.h | 主循环向显示与回传发布的完整状态快照 |
+| vex.h | SDK入口 |
+
+`src/main.cpp` 统一调度并写电机，`src/route.cpp` 只编排路线。硬件、采样、测试调度、比赛回调、显示与遥测各有对应实现文件。
+
+`src/odometry.cpp` 只有一个实现文件，不另拆位姿头文件、配置文件或线程。主循环用左右平均编码器增量与连续IMU转角更新位置；显示和遥测通过已有mutex读取整包 `runtime_info::pose`，不会读写估计器实例。校准等待、有效和失效锁存分别显示WAIT/OK/RESET，运行中失效后必须在已知位置显式重设。当前位姿不反馈给动作控制器。
 
 ## 公共动作接口
 
@@ -57,7 +51,7 @@ RunRoute({DriveStraight(500), Wait(200), Turn(90), DriveStraight(500)});
 每次只启动一个动作，后续周期检查完成后推进；Wait由主循环时钟计时，零毫秒等待可直接推进。
 完成锁存，启动失败/取消/反馈故障/超时停止全路线，场控禁用立即取消；不创建阻塞路线线程。
 底层 StartDriveStraight/StartTurnRelative/StartTurnToHeading/StartDriveCorner 仍保留供调度器使用。
-自动与比赛实例均采用 motion-presets；菜单A请求一次自动，X进入测试，选择键不直接写电机。
+自动与比赛实例均采用 performance-config 中的共用预设；菜单A请求一次自动，X进入测试，选择键不直接写电机。
 场控连接时SessionPermissions绕过本地选择，直接使用比赛权限；标定构建保留独立许可。
 完整示例及单位见 [路线指南](ROUTE_GUIDE.md)。
 

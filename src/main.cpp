@@ -4,15 +4,9 @@
 #include "autonomous.h"
 #include "competition-control.h"
 #include "runtime-info.h"
-#include "motion-presets.h"
+#include "performance-config.h"
 #include "startup-mode.h"
-#if BARTMOSS_CALIBRATION
-#include "calibration-config.h"
-#elif BARTMOSS_HIGH_SPEED
-#include "high-speed-config.h"
-#else
 #include "test-config.h"
-#endif
 
 static_assert(config::YAxis >= 1 && config::YAxis <= 4 && config::AngularAxis >= 1 && config::AngularAxis <= 4,
               "Joystick axes must be 1..4");
@@ -41,6 +35,10 @@ int main() {
   }
   static manual::driver_control DriverControl(config::PISTON_INITIAL_STATE);
   static autonomous_program Autonomous;
+  static drive::odometry Odometry;
+  Odometry.Configure(config::DRIVE_WHEEL_DIAMETER_MM, config::DRIVE_MOTOR_REVS_PER_WHEEL_REV,
+                     config::DRIVE_TRACK_WIDTH_MM);
+  Odometry.SetPose(0, 0, 0); // 已知起点；不清零电机/IMU。首次完整反馈建立传感器基准。
 #if !BARTMOSS_CALIBRATION
   static runtime::startup_mode Selection;
 #endif
@@ -99,6 +97,9 @@ int main() {
     frame.velocity.left_rpm = speed.left.encoder_rpm; frame.velocity.right_rpm = speed.right.encoder_rpm;
     frame.stopped = frame.velocity.valid && std::fabs(frame.velocity.left_rpm) < 5 && std::fabs(frame.velocity.right_rpm) < 5;
 #endif
+    // 所有模式持续推算，直接用位置增量，不积分已滤波的转速；位姿暂不参与动作控制。
+    Odometry.Update(frame.position.left_deg, frame.position.right_deg, heading, now,
+        configured && frame.motors_online && frame.position.valid && frame.inertial_ready);
 #if !BARTMOSS_CALIBRATION
     const bool initialization_ready = inertial != hardware::InertialState::calibrating;
     const bool sticks = std::abs(input.y_axis) > config::JOYSTICK_DEADBAND ||
@@ -175,6 +176,7 @@ int main() {
     hardware::Apply(output, true, (connected && !access.manual) || test_owns_drive || execute_route || (!access.manual && !access.autonomous) ||
                     inertial == hardware::InertialState::calibrating);
     drive::PublishCommand(output.L_voltage, output.R_voltage, access.manual || execute_route, true, mode, target_rpm);
+    info.pose = Odometry.Info();
     info.input = input; info.output = output; info.configured = configured;
     info.enabled = access.manual || execute_route; info.telemetry = telemetry;
     info.tick = tick++; info.dt = dt; info.automatic = Autonomous.Info();

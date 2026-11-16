@@ -1,6 +1,6 @@
 #pragma once
 
-#include "program-mode.h"
+#include "startup-mode.h"
 
 struct competition_request {
   runtime::competition_stage stage = runtime::competition_stage::none;

@@ -51,6 +51,8 @@ void DriveTelemetry() {
       drive::PrintSample(value, dropped);
 #endif
       const runtime_info info = ReadRuntimeInfo();
+      printf("DPO,%u,%.1f,%.2f,%.2f,%.2f,%d,%d\n", value.sequence, info.pose.time_ms,
+          info.pose.x_mm, info.pose.y_mm, info.pose.heading_deg, info.pose.valid, info.pose.needs_reset);
       PrintMotion(value.sequence, info.test);
       const bool route_terminal = info.local_selection && info.local_mode != runtime::local_mode::test && info.automatic.run;
       if (info.route_debug || info.autonomous_period || route_terminal) {

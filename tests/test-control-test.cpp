@@ -1,5 +1,4 @@
 #include "test-config.h"
-#include "high-speed-config.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>

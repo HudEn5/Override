@@ -1,7 +1,7 @@
 // 当前几何/增益与四组前馈快照，加上 1.4.5 入弯/弯内速度调节，不代表实车极限。
 
 #include "drive-corner.h"
-#include "high-speed-config.h"
+#include "test-config.h"
 #include <cstdio>
 #include <cassert>
 #include <cstdlib>

@@ -108,11 +108,12 @@ void ControllerInfoDisplay() {
     // 第二行留给初始化错误；其余显示只读取快照，不调用运动控制器。
     Brain.Screen.printAt(10, 60, true, "%s CFG=%d PAD=%d RUN=%d LOG=%s          ", Environment(), info.configured,
                          Controller.installed(), info.enabled, info.telemetry ? "ON" : "OFF");
-    Brain.Screen.printAt(10, 85, "A3=%4d A1=%4d Tick=%u          ", info.input.y_axis, info.input.angular_axis, info.tick);
+    Brain.Screen.printAt(10, 85, "X=%7.0f Y=%7.0f mm          ", info.pose.x_mm, info.pose.y_mm);
     Brain.Screen.printAt(10, 110, "L=%6d R=%6d mV           ", info.output.L_voltage, info.output.R_voltage);
     Brain.Screen.printAt(10, 135, "FLD=%d SW=%d EN=%d CB=%d:%u       ", Competition.isFieldControl(),
                          Competition.isCompetitionSwitch(), Competition.isEnabled(), static_cast<int>(info.phase.stage), info.phase.generation);
-    Brain.Screen.printAt(10, 160, "Motors L=%d/4 R=%d/4        ", l, r);
+    Brain.Screen.printAt(10, 160, "H=%7.1f %s L%d R%d       ", info.pose.heading_deg,
+        info.pose.needs_reset ? "RESET" : info.pose.valid ? "OK" : "WAIT", l, r);
     Brain.Screen.printAt(10, 185, "U=%5d AL=%5.1f AR=%5.1f      ", info.output.arm_voltage, left, right);
     Brain.Screen.printAt(10, 210, "R1=%d R2=%d ARM=%d dt=%4.0fms      ", info.input.arm_up, info.input.arm_down, info.output.arm_enabled, info.dt);
     Brain.Screen.printAt(10, 235, true, "%s %s                                  ", Environment(),

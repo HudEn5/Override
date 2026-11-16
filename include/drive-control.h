@@ -178,4 +178,24 @@ class motor_feedforward {
  private:
   feedforward_config settings;
 };
+// 位姿以底盘中心为原点：mm，X为初始前方，Y为初始左方，逆时针为正。
+struct pose {
+  double x_mm = 0, y_mm = 0, heading_deg = 0, time_ms = 0;
+  bool valid = false, needs_reset = false;
+};
+
+// 只由主循环写，读者使用已有runtime_info快照；实现集中在src/odometry.cpp。
+class odometry {
+ public:
+  bool Configure(double wheel_diameter_mm, double motor_revs_per_wheel_rev, double track_width_mm);
+  bool SetPose(double x_mm, double y_mm, double heading_deg);
+  void Update(double left_deg, double right_deg, double imu_deg, double now_ms, bool ready);
+  const pose& Info() const { return value; }
+ private:
+  void Lose();
+  pose value;
+  bool configured = false, seeded = false;
+  double mm_per_degree = 0, max_heading_rate = 0;
+  double previous_left = 0, previous_right = 0, previous_imu = 0;
+};
 }  // 底盘控制命名空间

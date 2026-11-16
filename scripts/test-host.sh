@@ -11,6 +11,7 @@ run() {
 }
 run driver tests/driver-control-test.cpp
 run sampling-math tests/drive-control-test.cpp
+run odometry src/odometry.cpp tests/odometry-test.cpp
 run velocity tests/velocity-control-test.cpp
 run heading tests/heading-control-test.cpp
 run trapezoid-profile tests/trapezoid-profile-test.cpp

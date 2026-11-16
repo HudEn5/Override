@@ -73,7 +73,7 @@ RunRoute({
 
 ## 高速参数
 
-`include/motion-presets.h` 是高速参数的共同来源，测试和比赛使用同一份副本配置：
+`include/performance-config.h` 是高速参数的共同来源，测试和比赛使用同一份副本配置：
 
 - 直行采用 H3 基线：330 rpm 默认上限、320/320 rpm/s 加减速，不采用候选 H4 的增强位置增益。
 - 原地转向复用 `TurnControl()` 的增益、240 rpm/s 目标变化限制与停稳判定；默认目标上限140 rpm。

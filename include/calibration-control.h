@@ -2,8 +2,6 @@
 
 #include "driver-control-logic.h"
 #include "drive-control.h"
-#include "heading-control.h"
-#include "velocity-control.h"
 #include "drive-velocity.h"
 #include <cmath>
 

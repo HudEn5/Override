@@ -1,7 +1,6 @@
 #pragma once
 
 #include "drive-velocity.h"
-#include "heading-control.h"
 #include "trapezoid-motion.h"
 
 namespace drive {

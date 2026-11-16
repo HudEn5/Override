@@ -2,13 +2,12 @@
 
 #include "vex.h"
 #include "drive-control.h"
-#include "heading-control.h"
-#include "velocity-control.h"
+#include "drive-velocity.h"
 #include "trapezoid-motion.h"
 #include "drive-straight.h"
 #include "drive-turn.h"
 #include "drive-corner.h"
-#include "program-mode.h"
+#include "startup-mode.h"
 
 // 智能端口填写主控上的编号 1～21；三线端口填写 'A'～'H'。
 namespace config {
@@ -18,7 +17,7 @@ namespace config {
 #if BARTMOSS_HIGH_SPEED != 0 && BARTMOSS_HIGH_SPEED != 1
 #error Invalid high-speed environment
 #endif
-const char PROGRAM_VERSION[] = "2.0.6-route3";  // 自动到位且零速达标即交接，不额外驻停，X仍250ms。
+const char PROGRAM_VERSION[] = "2.1.0-odom1";  // 增加旁路位姿推算，原动作控制保持基线行为。
 const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
 // 默认高速菜单；低速测试、比赛和标定可通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION
@@ -78,6 +77,7 @@ const int INERTIAL_PORT = 4;
 constexpr double DRIVE_WHEEL_DIAMETER_MM = 69.85;
 // 电机减速箱输出轴转数 / 轮子转数。直接连接为 1，外部再减速 3:1 为 3。
 constexpr double DRIVE_MOTOR_REVS_PER_WHEEL_REV = 36.0 / 30.0;
+constexpr double DRIVE_TRACK_WIDTH_MM = 325;  // 左右驱动轮接地中心线间距。
 constexpr double AUTO_TURN_KP = 1.6;  // rpm/deg；转向专用，直行航向增益不变。
 constexpr double AUTO_TURN_KD = 0.2;  // rpm/(deg/s)
 constexpr double AUTO_ANGLE_TOLERANCE = 0.8;  // deg
@@ -131,7 +131,7 @@ inline drive::turn_config TurnControl() {
   drive::turn_config result;
   result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
   result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
-  result.track_width_mm = 325;
+  result.track_width_mm = DRIVE_TRACK_WIDTH_MM;
   result.kP = AUTO_TURN_KP; result.kD = AUTO_TURN_KD;
   result.angle_tolerance_deg = AUTO_ANGLE_TOLERANCE;
   result.pid = DRIVE_VELOCITY_PID;
@@ -151,7 +151,7 @@ inline drive::corner_config CornerControl() {
   drive::corner_config result;
   result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
   result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
-  result.track_width_mm = 325;  // 用户实测左右驱动轮接地中心线间距。
+  result.track_width_mm = DRIVE_TRACK_WIDTH_MM;
   result.radius_mm = 250;      // 参考曲率峰值对应半径；曲率渐入渐出。
   result.corner_rpm = 140;  // 弯内上限；实际按航向跟随情况降速，不能当作实车已验证速度。
   result.corner_floor_rpm = 100;  // 入弯偏好及反馈降速下限；预测限速可以低于此值。

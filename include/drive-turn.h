@@ -1,7 +1,7 @@
 #pragma once
 
 #include "drive-straight.h"
-#include "trapezoid-profile.h"
+#include "trapezoid-motion.h"
 
 namespace drive {
 enum class turn_state { idle, running, done, cancelled, error };

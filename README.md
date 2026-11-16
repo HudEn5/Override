@@ -4,7 +4,9 @@
 提供手动驾驶、底盘运动控制、独立实车测试、标定和遥测功能。
 
 **当前基线：`2.0.6-route3`。** 历史底层2.0标签`core-v2.0.0`保留。启动通过菜单选择A自动、B手动、X测试，本地与比赛自动共用`src/route.cpp`。
-当前工作区为`2.0.6-route3`实验：默认540电机rpm（轮端450rpm），自动执行直行1.5m→原地逆时针90°→直行1.5m。到位且零速门槛满足后当周期交接，取消额外确认计时；X单项仍250ms。上一版已有整条路线DONE，本次即时交接待实车。见[路线指南](docs/ROUTE_GUIDE.md)和[转向整定](docs/TURN_TUNING.md)。
+已发布基线默认：默认540电机rpm（轮端450rpm），自动执行直行1.5m→原地逆时针90°→直行1.5m。到位且零速门槛满足后当周期交接，取消额外确认计时；X单项仍250ms。上一版已有整条路线DONE，本次即时交接待实车。见[路线指南](docs/ROUTE_GUIDE.md)和[转向整定](docs/TURN_TUNING.md)。
+开发分支 `feat/odometry` 为 `2.1.0-odom1`，增加编码器＋IMU位姿推算；基线已保存至 [92eba1f](https://github.com/HudEn5/Override/commit/92eba1f0ec2c7923323be5330e8f5db8ef05f707)。位姿当前仅观测，不参与原动作控制。
+
 本版本作为自动路线编排的底层基线。软件与模型检查已经覆盖核心控制、调度和并发；实际验证范围及限制见下文。
 
 ## 功能
@@ -67,7 +69,7 @@ cd Override
 输出`build/highspeed/Bartmoss.bin`，不会覆盖默认下载文件`build/Bartmoss.bin`。
 菜单A执行 `src/route.cpp` 的整条路线：前进1500 mm → 到位停稳 → 原地逆时针90° → 到角停稳 → 再前进1500 mm。各动作完成后立即衔接，无额外等待。
 路线编排、Wait、无场控测试和比赛接入见 [路线指南](docs/ROUTE_GUIDE.md)。
-在 `include/high-speed-config.h` 将 `HIGH_SPEED_CORNER_TEST` 设为 false，X测试切换为 H1～H4 直行整定：
+在 `include/test-config.h` 将 `HIGH_SPEED_CORNER_TEST` 设为 false，X测试切换为 H1～H4 直行整定：
 200/265/330/330 rpm 四档、1.5～1.8 米行程；H3 保留基线，H4 在同速同加减速下增强位置纠偏，用于对照验证。
 上/下选择档位，右/左选方向，A 单次开始、B 取消、Y 回传；只在无场控时启用。
 包含持续达速、实际峰值、航向误差和速度跟踪指标；候选参数尚待实车验证。
@@ -123,12 +125,9 @@ cd Override
 | 配置文件 | 内容 |
 | --- | --- |
 | [control-config.h](include/control-config.h) | 接线、方向、手控电压、前馈/PID、几何及运动控制参数 |
-| [test-config.h](include/test-config.h) | 三项日常测试的距离、转角和最高速度 |
-| [calibration-config.h](include/calibration-config.h) | 专用标定档位、手势时间及超时 |
-| [motion-presets.h](include/motion-presets.h) | 路线与高速测试共用的加减速和圆角规划配置 |
-| [high-speed-config.h](include/high-speed-config.h) | X测试项目、高速档位与候选参数 |
-| [route-commands.h](include/route-commands.h) | 路线接口、默认转速与前推电压 |
-| [performance-config.h](include/performance-config.h) | 实验开关、轮端450rpm对应上限、原地角加减速与控制参数副本 |
+| [test-config.h](include/test-config.h) | 日常测试、高速整定、标定档位及超时 |
+| [performance-config.h](include/performance-config.h) | 共用运动预设、实验速度、原地角加减速与控制参数副本 |
+| [autonomous.h](include/autonomous.h) | 路线动作接口、默认速度与前推电压 |
 
 显式Test构建保留的低速参数如下；当前turn2默认高速构建的X测试为1500mm/540rpm、90°/540rpm、500/90°/500圆角/540rpm单侧上限。关闭实验开关后速度恢复2.0的330/140/330rpm，STR距离仍为1500mm：
 
@@ -205,7 +204,7 @@ node scripts/monitor-drive-websocket.mjs 120
 
 连接成功后按 Y 开启回传，用 A 启动测试；结束后按 Y 关闭。
 数据保存到`build/data/drive-websocket-时间戳*`，内部采样约50Hz；默认高速配置回传最多2Hz，普通/标定构建最多5Hz。
-高速构建仅发送当前动作及路线状态，基础速度/电机诊断CSV只有表头属预期行为。
+高速构建仅发送当前动作、路线及位姿状态，基础速度/电机诊断CSV只有表头属预期行为。
 
 | 输出 | 内容 |
 | --- | --- |
@@ -213,6 +212,7 @@ node scripts/monitor-drive-websocket.mjs 120
 | `-profile.csv` / `-heading.csv` | 直行规划 / 航向保持 |
 | `-velocity.csv` / `-quality.csv` | 速度 PID / 测速质量 |
 | `-turn.csv` / `-corner.csv` | 原地转向 / 连续圆角 |
+| `-pose.csv` | 中心位置 X/Y（mm）、连续航向（度）、有效/需重置标志 |
 | `-turn-profile.csv` | 原地角速度规划参考、阶段和角度跟踪误差 |
 | `-motors.csv` | LM/LF 电机诊断 |
 | `-route.csv` / `-push.csv` | 自动路线步骤与结果 / 定时前推电压、计时和停稳 |
@@ -225,6 +225,20 @@ CAL 环境提供固定电压 VTEST、前馈加航向保持 FH、速度闭环 SP�
 停稳后长按下键 1 秒切换模式，短按上/下换档；按住右/左前进/后退，松开刹车，每段最多 3 秒。
 电压档位为 2/3/4 V，转速档位为 100/150/200 rpm。A/B 或摇杆退出动作，Y 开关回传。
 日常 TEST 环境不包含该标定入口。
+
+## 位姿推算（开发分支）
+
+使用八台驱动电机编码器的左右平均位移和4号口IMU连续转角，按差速模型逐帧推算底盘中心位置。曲线采用中心弧长和半角修正；不积分滤波转速，也不增加线程。
+
+- 坐标：X为启动时前方，Y为启动时左方，单位mm；朝向逆时针为正，单位度，可超过360°。
+- 启动保持车静止，等IMU校准完成。首组完整反馈建立编码器基准，对应 `(0,0,0)`，不用手动清零电机。
+- 主控显示X/Y/H与 `WAIT`、`OK`、`RESET`；遥控器保持原动作显示。Y按需开启LOG，原接收脚本额外保存 `-pose.csv`，高速模式仍为2Hz。
+- `drive::odometry::SetPose(x,y,heading)` 用于指定已知场地坐标，只允许在主循环调用。正常重设保留传感器基准；失效后下一组完整反馈重新建立基准。该API不写硬件，也不改变原动作的IMU坐标。
+- 运行中反馈丢失、明显跳变、时间倒退或更新间隔超过200ms时锁存 `RESET`，保留最后可信坐标和时间，不能自动恢复成有效。须回到已知位置重新设置位姿，或重新启动并建立新的局部原点。
+
+首轮验证：先静止观察坐标，再手动直行、后退、原地转向；最后测量一条已知距离与转角路线，比较实际终点和X/Y/H。原地转向中心位置应基本不变，前进/后退坐标方向应相反。位姿失效不阻断现有动作，因为它目前只旁路观测。
+
+电机编码器会受轮胎打滑、轮径误差和碰撞影响；IMU只约束航向，不能消除位置漂移或识别车被搬动。物理定位后仍需提供已知坐标，`PushFor` 不自动归零。`MoveToPoint` 尚未接入，先验证位姿再开发。
 
 ## 验证与当前限制
 
@@ -241,7 +255,7 @@ node tests/drive-websocket-test.mjs
 node tests/sync-github.test.mjs
 ```
 
-当前工作区软件验证包括32个C++测试程序、108组角速度规划对照、当前高速圆角432组与原地转向72组角度/速度/负载模型，
+当前工作区软件验证包括33个C++测试程序、108组角速度规划对照、当前高速圆角432组与原地转向72组角度/速度/负载模型，
 以及原预测504组等回归、576种基础环境组合、按键与动作生命周期、反馈故障和采样/回调/快照并发一致性检查。
 Default、Test、Competition、Calibration、HighSpeed 五种 V5 SDK 构建均已通过。
 
@@ -258,7 +272,7 @@ Default、Test、Competition、Calibration、HighSpeed 五种 V5 SDK 构建均�
 ## 项目结构
 
 ```text
-include/    硬件配置、控制算法、状态与接口
+include/    20个头文件：硬件配置、控制算法、状态与接口
 src/        主循环、硬件适配、路线、显示与回传
 scripts/    构建、数据接收、软件测试与 Git 同步工具
 tests/      宿主机测试及硬件替身

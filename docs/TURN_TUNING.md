@@ -59,7 +59,7 @@
 
 操作者从VS Code下载，核对版本`2.0.6-route3`，等惯导校准结束。
 菜单X进入测试，上/下选TURN，右/左选择正负方向，A开始、B取消，Y切换回传。
-默认90°，修改`high-speed-config.h`的`result.turn_deg`可测试30/120°；
+默认90°，修改`test-config.h`的`result.turn_deg`可测试30/120°；
 `HIGH_SPEED_CORNER_DEG`控制的是圆角角度，和TURN不同。
 
 采集继续使用`monitor-drive-websocket.mjs`，保持原2Hz精简频率和LOG开关：
