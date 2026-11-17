@@ -48,8 +48,18 @@ if ($Mode -ne 'Default') {
 }
 if ($Rebuild) { $makeArguments = @('-B') + $makeArguments }
 $previousOS = $env:OS
+$logDirectory = Join-Path $projectRoot 'build/logs'
+New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+$logPath = Join-Path $logDirectory ("build-{0}-{1}.log" -f $Mode, (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+$recording = $false
 try {
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $env:OS = 'Windows_NT' }
+    Start-Transcript -Path $logPath | Out-Null
+    $recording = $true
     & $makePath @makeArguments
     if ($LASTEXITCODE -ne 0) { throw "VEX build failed (exit $LASTEXITCODE)." }
-} finally { $env:OS = $previousOS }
+} finally {
+    if ($recording) { Stop-Transcript | Out-Null }
+    $env:OS = $previousOS
+}
+Write-Host "Build log: $logPath"

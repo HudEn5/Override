@@ -3,7 +3,7 @@
 路线入口只有 `src/route.cpp`。测试与比赛执行同一份动作表，不需要手写状态机或修改运动控制器。
 本页默认速度表描述发布的2.0基线；当前turn3实验直行和原地转向默认上限均为540电机rpm（轮端450）。
 原地转向在实验档采用独立角加减速度的梯形规划，详见[转向整定](TURN_TUNING.md)。
-省略速度参数时随`performance-config.h`开关选择，显式参数始终按电机rpm解释，详见[提速实验](PERFORMANCE_TUNING.md)。
+省略速度参数时随`performance-config.h`开关选择，显式参数始终按电机rpm解释，详见[提速实验](HIGH_SPEED_TUNING.md)。
 
 ## 编写路线
 

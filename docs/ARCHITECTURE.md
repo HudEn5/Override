@@ -64,3 +64,8 @@ scripts/test-host.sh 运行 tests 下的控制器、调度和并发测试；mock
 
 README 面向当前操作；LAB_NOTES 保留真实实验历史，历史参数不代表当前配置。
 当前手臂使用纯电压控制。
+
+
+## 本地产物与历史
+
+build根目录只放活动默认产物及构建目录；日志自动进入logs，采集仍在data。旧试验放archive，备份保留backups，阶段实验文档在docs/history。历史记录中的旧路径通过本地logs/workspace-cleanup.json查询迁移位置；可重建测试文件的删除记录在logs/deleted-generated-files.json。

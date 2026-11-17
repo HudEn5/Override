@@ -282,6 +282,13 @@ vex/        VEX 构建规则
 ```
 
 构建产物、采集数据和本地备份保存在被 Git 忽略的 `build/` 中；SDK 与本机配置不随仓库分发。
+
+- `build/Bartmoss.bin` 为VS Code默认下载文件；test/competition/calibration/highspeed为各模式产物，位置保持原样。
+- `build/logs` 集中构建、宿主机检查日志及整理清单；build.ps1与test-host.sh自动写入带时间戳的日志。
+- `build/data` 保留原始遥测和分析；`build/backups` 保留原快照；`build/archive` 归档旧检查、候选副本、历史分析和视频参考。
+- `docs/history` 保存阶段实验与旧整定说明；日常从LAB_NOTES入口查看当前状态，不把历史参数当成现用参数。
+
+当前操作文档集中在代码结构、路线指南、启动模式、高速整定和转向整定五份；笔记本交接提示已合入DEVICE_SYNC。
 修改接线或控制参数时同步更新配置与文档，提交前运行相关软件测试和 V5 构建。
 
 - [代码结构与公共接口](docs/ARCHITECTURE.md)

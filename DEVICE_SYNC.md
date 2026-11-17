@@ -80,7 +80,12 @@ cd D:\vex\Override
 
 ## 给另一台电脑的 GPT
 
-新会话先读取仓库中的 `AGENTS.md`、本文件和 `LAB_NOTES.md`。可复制 [LAPTOP_PROMPT.md](LAPTOP_PROMPT.md) 的内容。
+新会话先读取仓库中的 `AGENTS.md`、本文件和 `LAB_NOTES.md`。可复制下方的交接提示。
 会话记录是否可见取决于使用的产品和同步能力，不能据此判断文件版本相同。
 [OpenAI 官方说明](https://learn.chatgpt.com/docs/projects)明确区分聊天同步与本地文件访问。
 两台电脑的 `git rev-parse HEAD` 相同，且各自工作区无修改，才表示它们当前已跟踪的代码版本一致。
+
+
+## 可复制的笔记本交接提示
+
+> 我使用Windows 64位笔记本，通过本机USB测试VEX V5。请先读取AGENTS.md、README.md和LAB_NOTES.md，核对Git根目录、origin、分支、提交号和未提交修改，再检查SDK、工具链与VEX扩展。仓库为HudEn5/Override，程序Bartmoss、槽位1。当前开发可能在feat/odometry，不能直接用main覆盖。请用configure-device.ps1 -Role Laptop避免实验期间后台更换源码；本机路径仅写入本机配置。由我本人通过VS Code下载程序，助手负责代码、编译和我要求的采集；不要自动下载或启动机器人。每轮区分软件模型与实车结果，更新LAB_NOTES；仅当我要求时提交推送。

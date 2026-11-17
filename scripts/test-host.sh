@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-mkdir -p build/host-tests
+mkdir -p build/host-tests build/logs
+log_file="build/logs/host-tests-$(date +%Y%m%d-%H%M%S)-$$.log"
+exec > >(tee "$log_file") 2>&1
+printf 'Host test log: %s\n' "$log_file"
 compiler="${CXX:-g++}"
 run() {
   local name="$1"
