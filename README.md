@@ -5,7 +5,7 @@
 
 **当前基线：`2.0.6-route3`。** 历史底层2.0标签`core-v2.0.0`保留。启动通过菜单选择A自动、B手动、X测试，本地与比赛自动共用`src/route.cpp`。
 已发布基线默认：默认540电机rpm（轮端450rpm），自动执行直行1.5m→原地逆时针90°→直行1.5m。到位且零速门槛满足后当周期交接，取消额外确认计时；X单项仍250ms。上一版已有整条路线DONE，本次即时交接待实车。见[路线指南](docs/ROUTE_GUIDE.md)和[转向整定](docs/TURN_TUNING.md)。
-开发分支 `feat/odometry` 为 `2.1.0-point1`，增加编码器＋IMU位姿推算；基线已保存至 [92eba1f](https://github.com/HudEn5/Override/commit/92eba1f0ec2c7923323be5330e8f5db8ef05f707)。原距离动作保持原控制方式；新增 `MoveToPoint` 使用位姿编排转向和直行，`Swing` 支持单侧制动转向，均待实车验证。开发版另调整高速原地转向的减速和尾段参数，实车待验，见[转向整定](docs/TURN_TUNING.md)。
+开发分支 `feat/odometry` 为 `2.1.0-api1`，增加编码器＋IMU位姿推算；基线已保存至 [92eba1f](https://github.com/HudEn5/Override/commit/92eba1f0ec2c7923323be5330e8f5db8ef05f707)。原距离动作保持原控制方式；新增 `MoveToPoint` 使用位姿编排转向和直行，`Swing` 支持单侧制动转向，均待实车验证。开发版另调整高速原地转向的减速和尾段参数，实车待验，见[转向整定](docs/TURN_TUNING.md)。
 
 本版本作为自动路线编排的底层基线。软件与模型检查已经覆盖核心控制、调度和并发；实际验证范围及限制见下文。
 
@@ -255,7 +255,7 @@ node tests/drive-websocket-test.mjs
 node tests/sync-github.test.mjs
 ```
 
-当前工作区软件验证包括34个C++测试程序、144组角速度规划对照、当前高速圆角432组与原地转向72组角度/速度/负载模型，
+当前工作区软件验证包括35个C++测试程序、144组角速度规划对照、当前高速圆角432组与原地转向72组角度/速度/负载模型，
 以及原预测504组等回归、576种基础环境组合、按键与动作生命周期、反馈故障和采样/回调/快照并发一致性检查。
 Default、Test、Competition、Calibration、HighSpeed 五种 V5 SDK 构建均已通过。
 
@@ -291,7 +291,7 @@ vex/        VEX 构建规则
 当前操作文档集中在代码结构、路线指南、启动模式、高速整定和转向整定五份；笔记本交接提示已合入DEVICE_SYNC。
 修改接线或控制参数时同步更新配置与文档，提交前运行相关软件测试和 V5 构建。
 
-- [代码结构与公共接口](docs/ARCHITECTURE.md)
+- [代码结构、公共接口与编码约定](docs/ARCHITECTURE.md)
 - [设备配置与多电脑同步](DEVICE_SYNC.md)
 - [实验与验证记录](LAB_NOTES.md)
 - [路线编排与动作接口](docs/ROUTE_GUIDE.md)

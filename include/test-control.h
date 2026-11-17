@@ -28,12 +28,20 @@ class test_control {
  public:
   void Configure(const test_settings& value, const drive::straight_config& straight,
                  const drive::turn_config& turn, const drive::corner_config& corner) {
-    settings = value; Straight.Configure(straight); Turn.Configure(turn); Corner.Configure(corner);
-    info = test_info(); info.selected = value.initial_motion; UpdateSelection();
+    settings = value;
+    Straight.Configure(straight);
+    Turn.Configure(turn);
+    Corner.Configure(corner);
+    info = test_info();
+    info.selected = value.initial_motion;
+    UpdateSelection();
   }
-  bool Update(const manual::Input& input, manual::Output& output, bool allowed,
-              double now, const drive::straight_feedback& frame);
-  const test_info& Info() const { return info; }
+  bool Update(const manual::input& input, manual::output& output, bool allowed, double now,
+              const drive::straight_feedback& frame);
+  const test_info& Info() const {
+    return info;
+  }
+
  private:
   void UpdateSelection();
   void ResetMotion();

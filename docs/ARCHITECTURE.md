@@ -69,3 +69,14 @@ README 面向当前操作；LAB_NOTES 保留真实实验历史，历史参数不
 ## 本地产物与历史
 
 build根目录只放活动默认产物及构建目录；日志自动进入logs，采集仍在data。旧试验放archive，备份保留backups，阶段实验文档在docs/history。历史记录中的旧路径通过本地logs/workspace-cleanup.json查询迁移位置；可重建测试文件的删除记录在logs/deleted-generated-files.json。
+
+
+## 接口与编码约定（2.1.0-api1）
+
+- 内部类型用snake_case，方法用PascalCase，变量/字段用snake_case；LF/ArmL/Controller等参考工程硬件名保留。数值字段带mm、deg、rpm、mV、ms等单位；PushFor对外仍用V。通用数学规划器以秒为时间单位，调用边界显式换算。
+- .clang-format固定2空格、110列及统一排版；不按类继续拆头文件。
+- drive::motion_state统一基础动作结果，各控制器保留state别名；route_result区分空闲/执行/完成/取消/故障。显示文字不参与路线结果判定，只有遥测出口把枚举转数字，协议编号保持原样。
+- route::command使用distance_mm、angle_deg、x_mm、y_mm、duration_ms、volts、maximum_rpm、turn_rpm、fixed_side等明确字段，路线工厂函数签名不变。禁止用first/second和浮点数代替枚举传参。
+- CancelRoutine立即发布零输出；各Cancel子动作同步更新快照。ResetControl只清PID/输出状态，ConfigurePID额外丢弃旧反馈序号和时钟，首次Observe建立新基准。
+- PointControl独立配置5mm终点容差和200ms定位新鲜度。点位动作把部分总误差预算分给朝向、部分给沿程，根据距离收紧转向和直行容差，同时降低严格转向末端的最低补角转速；普通Turn/DriveStraight参数不变。全局超差仍报错，不放宽终点判定。
+- 直行的max_heading_speed_fraction限制目标转速纠偏，heading.max_voltage_fraction限制电压纠偏；两者单独配置，默认均0.25。

@@ -45,16 +45,16 @@ void BeginCommandUpdate() {
   queue_mutex.unlock();
 }
 
-void PublishCommand(int left_mV, int right_mV, bool enabled, bool manual_drive,
-                    int mode, double target_rpm) {
+void PublishCommand(int left_mV, int right_mV, bool enabled, bool command_valid, int mode,
+                    double target_rpm) {
   queue_mutex.lock();
-  if (left_command != left_mV || right_command != right_mV ||
-      command_enabled != enabled || command_known != manual_drive ||
-      command_mode != mode || command_target_rpm != target_rpm) ++command_version;
+  if (left_command != left_mV || right_command != right_mV || command_enabled != enabled ||
+      command_known != command_valid || command_mode != mode || command_target_rpm != target_rpm)
+    ++command_version;
   left_command = left_mV;
   right_command = right_mV;
   command_enabled = enabled;
-  command_known = manual_drive;
+  command_known = command_valid;
   command_mode = mode;
   command_target_rpm = target_rpm;
   command_updating = false;
@@ -64,7 +64,8 @@ void PublishCommand(int left_mV, int right_mV, bool enabled, bool manual_drive,
 bool ReadLatestSample(sample& value) {
   queue_mutex.lock();
   const bool available = latest_available;
-  if (available) value = latest;
+  if (available)
+    value = latest;
   queue_mutex.unlock();
   return available;
 }
@@ -143,31 +144,28 @@ bool PopSample(sample& value, unsigned int& dropped) {
 }
 
 void PrintSample(const sample& value, unsigned int dropped) {
-  const unsigned int acceleration_mask = (value.left.acceleration_valid ? 1u : 0u) |
-                                        (value.right.acceleration_valid ? 2u : 0u);
+  const unsigned int acceleration_mask =
+      (value.left.acceleration_valid ? 1u : 0u) | (value.right.acceleration_valid ? 2u : 0u);
   // DS2 在原 27 列后追加模式和目标 rpm，接收脚本同时兼容旧 DSV。
-  printf("DS2,%u,%.1f,%.1f,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,"
-         "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%d,%d,%d,%d,%d,%.1f\n",
-         value.sequence, value.time_ms, value.dt_ms,
-         value.left.online_mask, value.right.online_mask, acceleration_mask,
-         value.left.raw_average_rpm, value.right.raw_average_rpm,
-         value.left.rpm, value.right.rpm, value.left.acceleration, value.right.acceleration,
-         value.left.millivolts, value.right.millivolts,
-         value.left.raw_rpm[0], value.left.raw_rpm[1], value.left.raw_rpm[2], value.left.raw_rpm[3],
-         value.right.raw_rpm[0], value.right.raw_rpm[1], value.right.raw_rpm[2], value.right.raw_rpm[3],
-         dropped, value.command_valid, value.enabled,
-         value.left_command_mV, value.right_command_mV, value.mode, value.target_rpm);
+  printf(
+      "DS2,%u,%.1f,%.1f,%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.0f,%.0f,"
+      "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%d,%d,%d,%d,%d,%.1f\n",
+      value.sequence, value.time_ms, value.dt_ms, value.left.online_mask, value.right.online_mask,
+      acceleration_mask, value.left.raw_average_rpm, value.right.raw_average_rpm, value.left.rpm,
+      value.right.rpm, value.left.acceleration, value.right.acceleration, value.left.millivolts,
+      value.right.millivolts, value.left.raw_rpm[0], value.left.raw_rpm[1], value.left.raw_rpm[2],
+      value.left.raw_rpm[3], value.right.raw_rpm[0], value.right.raw_rpm[1], value.right.raw_rpm[2],
+      value.right.raw_rpm[3], dropped, value.command_valid, value.enabled, value.left_command_mV,
+      value.right_command_mV, value.mode, value.target_rpm);
   // 与参考代码的 std::endl 一样逐行刷新，避免多行积在标准输出缓冲区。
   fflush(stdout);
   // 与 DS2 用序号和时间关联。单独成行，保持已有速度协议和旧 CSV 的兼容性。
-  printf("DLM,%u,%.1f,%.2f,%.3f,%.2f,%.3f,%u\n",
-         value.sequence, value.time_ms, value.LM_deg, value.LM_current_A,
-         value.LF_deg, value.LF_current_A, value.diagnostic_mask);
+  printf("DLM,%u,%.1f,%.2f,%.3f,%.2f,%.3f,%u\n", value.sequence, value.time_ms, value.LM_deg,
+         value.LM_current_A, value.LF_deg, value.LF_current_A, value.diagnostic_mask);
   fflush(stdout);
   printf("DSQ,%u,%.1f,%u,%u,%d,%d,%.2f,%.2f,%d,%d\n", value.sequence, value.time_ms,
-         value.left.rejected_rpm_mask, value.right.rejected_rpm_mask,
-         value.left.encoder_velocity_valid, value.right.encoder_velocity_valid,
-         value.left.encoder_rpm, value.right.encoder_rpm,
+         value.left.rejected_rpm_mask, value.right.rejected_rpm_mask, value.left.encoder_velocity_valid,
+         value.right.encoder_velocity_valid, value.left.encoder_rpm, value.right.encoder_rpm,
          value.left.velocity_valid, value.right.velocity_valid);
   fflush(stdout);
 }

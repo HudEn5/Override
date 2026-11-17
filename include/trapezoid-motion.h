@@ -8,98 +8,120 @@
 // 当前实现从静止出发、到静止结束，不依赖 VEX 设备。
 namespace motion {
 
-struct ProfileState {
-    double position;
-    double velocity;
+struct profile_state {
+  double position;
+  double velocity;
 };
 
-class TrapezoidProfile {
-public:
-    TrapezoidProfile(double distance, double maxVelocity,
-                     double acceleration, double deceleration)
-        : m_valid(false), m_direction(distance < 0 ? -1.0 : 1.0),
-          m_distance(std::fabs(distance)), m_acceleration(acceleration),
-          m_deceleration(deceleration), m_peakVelocity(0),
-          m_accelerationTime(0), m_cruiseTime(0), m_decelerationTime(0),
-          m_accelerationDistance(0), m_totalTime(0) {
-        if (!std::isfinite(distance) || !positive(maxVelocity) ||
-            !positive(acceleration) || !positive(deceleration)) return;
-        if (m_distance == 0) {
-            m_valid = true;
-            return;
-        }
-
-        // 到达最高速度再刹停需要的路程。路程不够则降低峰值，成为三角形。
-        const double rampDistance = maxVelocity * maxVelocity *
-            (0.5 / acceleration + 0.5 / deceleration);
-        if (!std::isfinite(rampDistance)) return;
-        m_peakVelocity = m_distance < rampDistance
-            ? std::sqrt(m_distance / (0.5 / acceleration + 0.5 / deceleration))
-            : maxVelocity;
-        m_accelerationTime = m_peakVelocity / acceleration;
-        m_decelerationTime = m_peakVelocity / deceleration;
-        m_accelerationDistance = 0.5 * m_peakVelocity * m_accelerationTime;
-        const double decelerationDistance = 0.5 * m_peakVelocity * m_decelerationTime;
-        const double cruiseDistance = std::fmax(0.0,
-            m_distance - m_accelerationDistance - decelerationDistance);
-        m_cruiseTime = cruiseDistance / m_peakVelocity;
-        m_totalTime = m_accelerationTime + m_cruiseTime + m_decelerationTime;
-        m_valid = positive(m_peakVelocity) && positive(m_totalTime);
+class trapezoid_profile {
+ public:
+  trapezoid_profile(double distance, double max_velocity, double acceleration, double deceleration)
+      : m_valid(false),
+        m_direction(distance < 0 ? -1.0 : 1.0),
+        m_distance(std::fabs(distance)),
+        m_acceleration(acceleration),
+        m_deceleration(deceleration),
+        m_peak_velocity(0),
+        m_acceleration_time(0),
+        m_cruise_time(0),
+        m_deceleration_time(0),
+        m_acceleration_distance(0),
+        m_total_time(0) {
+    if (!std::isfinite(distance) || !Positive(max_velocity) || !Positive(acceleration) ||
+        !Positive(deceleration))
+      return;
+    if (m_distance == 0) {
+      m_valid = true;
+      return;
     }
 
-    bool valid() const { return m_valid; }
-    double duration() const { return m_totalTime; }          // s
-    double peakVelocity() const { return m_peakVelocity; } // 非负峰值
-    double accelerationTime() const { return m_accelerationTime; }
-    double cruiseTime() const { return m_cruiseTime; }
-    double decelerationTime() const { return m_decelerationTime; }
+    // 到达最高速度再刹停需要的路程。路程不够则降低峰值，成为三角形。
+    const double ramp_distance = max_velocity * max_velocity * (0.5 / acceleration + 0.5 / deceleration);
+    if (!std::isfinite(ramp_distance))
+      return;
+    m_peak_velocity = m_distance < ramp_distance
+                          ? std::sqrt(m_distance / (0.5 / acceleration + 0.5 / deceleration))
+                          : max_velocity;
+    m_acceleration_time = m_peak_velocity / acceleration;
+    m_deceleration_time = m_peak_velocity / deceleration;
+    m_acceleration_distance = 0.5 * m_peak_velocity * m_acceleration_time;
+    const double deceleration_distance = 0.5 * m_peak_velocity * m_deceleration_time;
+    const double cruise_distance =
+        std::fmax(0.0, m_distance - m_acceleration_distance - deceleration_distance);
+    m_cruise_time = cruise_distance / m_peak_velocity;
+    m_total_time = m_acceleration_time + m_cruise_time + m_deceleration_time;
+    m_valid = Positive(m_peak_velocity) && Positive(m_total_time);
+  }
 
-    ProfileState sample(double seconds) const {
-        if (!m_valid || !std::isfinite(seconds) || seconds <= 0) return {0, 0};
-        if (seconds >= m_totalTime) return {m_direction * m_distance, 0};
+  bool Valid() const {
+    return m_valid;
+  }
+  double Duration() const {
+    return m_total_time;
+  }  // s
+  double PeakVelocity() const {
+    return m_peak_velocity;
+  }  // 非负峰值
+  double AccelerationTime() const {
+    return m_acceleration_time;
+  }
+  double CruiseTime() const {
+    return m_cruise_time;
+  }
+  double DecelerationTime() const {
+    return m_deceleration_time;
+  }
 
-        double position, velocity;
-        if (seconds < m_accelerationTime) {
-            velocity = m_acceleration * seconds;
-            position = 0.5 * m_acceleration * seconds * seconds;
-        } else if (seconds < m_accelerationTime + m_cruiseTime) {
-            velocity = m_peakVelocity;
-            position = m_accelerationDistance +
-                m_peakVelocity * (seconds - m_accelerationTime);
-        } else {
-            const double remainingTime = m_totalTime - seconds;
-            velocity = m_deceleration * remainingTime;
-            position = m_distance - 0.5 * m_deceleration * remainingTime * remainingTime;
-        }
-        return {m_direction * position, m_direction * velocity};
+  profile_state Sample(double seconds) const {
+    if (!m_valid || !std::isfinite(seconds) || seconds <= 0)
+      return {0, 0};
+    if (seconds >= m_total_time)
+      return {m_direction * m_distance, 0};
+
+    double position, velocity;
+    if (seconds < m_acceleration_time) {
+      velocity = m_acceleration * seconds;
+      position = 0.5 * m_acceleration * seconds * seconds;
+    } else if (seconds < m_acceleration_time + m_cruise_time) {
+      velocity = m_peak_velocity;
+      position = m_acceleration_distance + m_peak_velocity * (seconds - m_acceleration_time);
+    } else {
+      const double remaining_time = m_total_time - seconds;
+      velocity = m_deceleration * remaining_time;
+      position = m_distance - 0.5 * m_deceleration * remaining_time * remaining_time;
     }
+    return {m_direction * position, m_direction * velocity};
+  }
 
-private:
-    static bool positive(double value) { return std::isfinite(value) && value > 0; }
-    bool m_valid;
-    double m_direction, m_distance, m_acceleration, m_deceleration;
-    double m_peakVelocity, m_accelerationTime, m_cruiseTime, m_decelerationTime;
-    double m_accelerationDistance, m_totalTime;
+ private:
+  static bool Positive(double value) {
+    return std::isfinite(value) && value > 0;
+  }
+  bool m_valid;
+  double m_direction, m_distance, m_acceleration, m_deceleration;
+  double m_peak_velocity, m_acceleration_time, m_cruise_time, m_deceleration_time;
+  double m_acceleration_distance, m_total_time;
 };
 
 // 限制反馈修正后的速度指令变化率；反向时先减速到零，再向另一方向加速。
-inline double limitVelocity(double current, double target,
-                            double acceleration, double deceleration, double dt) {
-    if (dt <= 0) return current;
-    if ((current > 0 && target < 0) || (current < 0 && target > 0)) {
-        const double stopTime = std::fabs(current) / deceleration;
-        if (dt <= stopTime) {
-            return current + (current > 0 ? -1.0 : 1.0) * deceleration * dt;
-        }
-        const double magnitude = std::fmin(std::fabs(target), acceleration * (dt - stopTime));
-        return target < 0 ? -magnitude : magnitude;
+inline double LimitVelocity(double current, double target, double acceleration, double deceleration,
+                            double dt) {
+  if (dt <= 0)
+    return current;
+  if ((current > 0 && target < 0) || (current < 0 && target > 0)) {
+    const double stopTime = std::fabs(current) / deceleration;
+    if (dt <= stopTime) {
+      return current + (current > 0 ? -1.0 : 1.0) * deceleration * dt;
     }
-    const double rate = std::fabs(target) > std::fabs(current) ? acceleration : deceleration;
-    const double change = rate * dt;
-    return current + std::fmax(-change, std::fmin(change, target - current));
+    const double magnitude = std::fmin(std::fabs(target), acceleration * (dt - stopTime));
+    return target < 0 ? -magnitude : magnitude;
+  }
+  const double rate = std::fabs(target) > std::fabs(current) ? acceleration : deceleration;
+  const double change = rate * dt;
+  return current + std::fmax(-change, std::fmin(change, target - current));
 }
 
-} // namespace motion
+}  // namespace motion
 
 namespace drive {
 struct position_feedback {
@@ -142,117 +164,173 @@ struct trapezoid_info {
 // 同事的纯梯形规划提供位置/速度参考；本层仅输出中心目标 rpm，不写电机。
 class trapezoid_motion {
  public:
-  void Configure(const trapezoid_config& value) { config = value; info = trapezoid_info(); }
-  const trapezoid_info& Info() const { return info; }
-  void Reset() { info = trapezoid_info(); }
-  void Complete() { info = trapezoid_info(); Finish("DONE", 5); }
-  void Reject(const char* status) { Fail(status); }
-  void Cancel() { if (info.running) Finish("CANCEL", 6); }
+  void Configure(const trapezoid_config& value) {
+    config = value;
+    info = trapezoid_info();
+  }
+  const trapezoid_info& Info() const {
+    return info;
+  }
+  void Reset() {
+    info = trapezoid_info();
+  }
+  void Complete() {
+    info = trapezoid_info();
+    Finish("DONE", 5);
+  }
+  void Reject(const char* status) {
+    Fail(status);
+  }
+  void Cancel() {
+    if (info.running)
+      Finish("CANCEL", 6);
+  }
 
-  bool Start(int direction, double max_rpm, const position_feedback& position,
-             const velocity_feedback& speed, double now, bool stopped) {
+  bool Start(int direction, double max_rpm, const position_feedback& position, const velocity_feedback& speed,
+             double now, bool stopped) {
     info = trapezoid_info();
     if (!Positive(config.wheel_diameter_mm) || !Positive(config.motor_revs_per_wheel_rev) ||
         !Positive(config.distance_mm) || !Positive(config.acceleration_rpm_s) ||
         !Positive(config.deceleration_rpm_s) || !Nonnegative(config.position_kP) ||
         !Positive(config.max_position_correction_rpm) || !Positive(config.position_tolerance_mm) ||
-        !Positive(config.minimum_settle_rpm) || config.minimum_settle_rpm > config.max_position_correction_rpm ||
-        !Nonnegative(config.braking_delay_ms) ||
-        !Positive(config.velocity_tolerance_rpm) || !Nonnegative(config.settle_ms) ||
-        !Positive(config.timeout_margin_ms) || !Positive(config.max_update_ms) ||
-        !Positive(max_rpm) || max_rpm > 600 || (direction != 1 && direction != -1) ||
-        !Nonnegative(now)) return Fail("TP CONFIG");
-    if (!Valid(position, speed)) return Fail("POSITION ERR");
+        !Positive(config.minimum_settle_rpm) ||
+        config.minimum_settle_rpm > config.max_position_correction_rpm ||
+        !Nonnegative(config.braking_delay_ms) || !Positive(config.velocity_tolerance_rpm) ||
+        !Nonnegative(config.settle_ms) || !Positive(config.timeout_margin_ms) ||
+        !Positive(config.max_update_ms) || !Positive(max_rpm) || max_rpm > 600 ||
+        (direction != 1 && direction != -1) || !Nonnegative(now))
+      return Fail("TP CONFIG");
+    if (!Valid(position, speed))
+      return Fail("POSITION ERR");
     if (!stopped || std::fabs(speed.left_rpm) > config.velocity_tolerance_rpm ||
-        std::fabs(speed.right_rpm) > config.velocity_tolerance_rpm) return Fail("MOVING");
-    mm_per_degree = 3.14159265358979323846 * config.wheel_diameter_mm /
-                    (360.0 * config.motor_revs_per_wheel_rev);
+        std::fabs(speed.right_rpm) > config.velocity_tolerance_rpm)
+      return Fail("MOVING");
+    mm_per_degree =
+        3.14159265358979323846 * config.wheel_diameter_mm / (360.0 * config.motor_revs_per_wheel_rev);
     mm_s_per_rpm = mm_per_degree * 6.0;
-    if (!Positive(mm_per_degree) || !Positive(mm_s_per_rpm)) return Fail("TP CONFIG");
-    profile = motion::TrapezoidProfile(direction * config.distance_mm,
-        max_rpm * mm_s_per_rpm, config.acceleration_rpm_s * mm_s_per_rpm,
-        config.deceleration_rpm_s * mm_s_per_rpm);
-    if (!profile.valid()) return Fail("TP CONFIG");
-    origin_left = position.left_deg; origin_right = position.right_deg;
+    if (!Positive(mm_per_degree) || !Positive(mm_s_per_rpm))
+      return Fail("TP CONFIG");
+    profile = motion::trapezoid_profile(direction * config.distance_mm, max_rpm * mm_s_per_rpm,
+                                        config.acceleration_rpm_s * mm_s_per_rpm,
+                                        config.deceleration_rpm_s * mm_s_per_rpm);
+    if (!profile.Valid())
+      return Fail("TP CONFIG");
+    origin_left = position.left_deg;
+    origin_right = position.right_deg;
     maximum_rpm = max_rpm;
     goal = direction * config.distance_mm;
     started_at = previous_time = now;
     settled_at = -1;
     finishing = false;
-    info.running = true; info.phase = 1; info.status = "ACCEL";
-    info.time_ms = now; info.duration_ms = profile.duration() * 1000;
+    info.running = true;
+    info.phase = 1;
+    info.status = "ACCEL";
+    info.time_ms = now;
+    info.duration_ms = profile.Duration() * 1000;
     info.remaining_mm = goal;
     return true;
   }
 
   bool Update(const position_feedback& position, const velocity_feedback& speed, double now) {
-    if (!info.running) return info.phase == 5;
-    if (!Valid(position, speed)) return Fail("POSITION ERR");
+    if (!info.running)
+      return info.phase == 5;
+    if (!Valid(position, speed))
+      return Fail("POSITION ERR");
     if (!Nonnegative(now) || now < previous_time || now - previous_time > config.max_update_ms)
       return Fail("CLOCK ERR");
     const double dt = (now - previous_time) / 1000;
     previous_time = now;
-    info.time_ms = now; info.elapsed_ms = now - started_at;
-    if (info.elapsed_ms >= info.duration_ms + config.timeout_margin_ms) return Fail("TIMEOUT");
-    const motion::ProfileState reference = profile.sample(info.elapsed_ms / 1000);
+    info.time_ms = now;
+    info.elapsed_ms = now - started_at;
+    if (info.elapsed_ms >= info.duration_ms + config.timeout_margin_ms)
+      return Fail("TIMEOUT");
+    const motion::profile_state reference = profile.Sample(info.elapsed_ms / 1000);
     info.reference_mm = reference.position;
     info.reference_rpm = reference.velocity / mm_s_per_rpm;
-    info.distance_mm = ((position.left_deg - origin_left) / 2.0 +
-                        (position.right_deg - origin_right) / 2.0) * mm_per_degree;
+    info.distance_mm =
+        ((position.left_deg - origin_left) / 2.0 + (position.right_deg - origin_right) / 2.0) * mm_per_degree;
     info.remaining_mm = goal - info.distance_mm;
-    if (!std::isfinite(info.distance_mm) || !std::isfinite(info.remaining_mm)) return Fail("POSITION ERR");
+    if (!std::isfinite(info.distance_mm) || !std::isfinite(info.remaining_mm))
+      return Fail("POSITION ERR");
     const bool near = std::fabs(info.remaining_mm) <= config.position_tolerance_mm;
     const bool reference_done = info.elapsed_ms >= info.duration_ms;
     const bool passed_goal = goal > 0 ? info.remaining_mm < 0 : info.remaining_mm > 0;
     finishing = finishing || reference_done || near || passed_goal;
     const bool settled = reference_done && near &&
-        std::fabs(speed.left_rpm) <= config.velocity_tolerance_rpm &&
-        std::fabs(speed.right_rpm) <= config.velocity_tolerance_rpm;
-    if (!settled) settled_at = -1;
-    else if (settled_at < 0) settled_at = now;
-    if (settled && now - settled_at >= config.settle_ms) { Finish("DONE", 5); return true; }
-    info.phase = finishing ? 4 : (info.elapsed_ms < profile.accelerationTime() * 1000 ? 1 :
-        (info.elapsed_ms < (profile.accelerationTime() + profile.cruiseTime()) * 1000 ? 2 : 3));
-    info.status = info.phase == 1 ? "ACCEL" : info.phase == 2 ? "CRUISE" :
-                  info.phase == 3 ? "DECEL" : "SETTLE";
+                         std::fabs(speed.left_rpm) <= config.velocity_tolerance_rpm &&
+                         std::fabs(speed.right_rpm) <= config.velocity_tolerance_rpm;
+    if (!settled)
+      settled_at = -1;
+    else if (settled_at < 0)
+      settled_at = now;
+    if (settled && now - settled_at >= config.settle_ms) {
+      Finish("DONE", 5);
+      return true;
+    }
+    info.phase =
+        finishing
+            ? 4
+            : (info.elapsed_ms < profile.AccelerationTime() * 1000
+                   ? 1
+                   : (info.elapsed_ms < (profile.AccelerationTime() + profile.CruiseTime()) * 1000 ? 2 : 3));
+    info.status = info.phase == 1   ? "ACCEL"
+                  : info.phase == 2 ? "CRUISE"
+                  : info.phase == 3 ? "DECEL"
+                                    : "SETTLE";
     const double correction = Clamp(config.position_kP * (reference.position - info.distance_mm),
-                                     config.max_position_correction_rpm);
+                                    config.max_position_correction_rpm);
     double requested = Clamp(info.reference_rpm + correction, maximum_rpm);
     if (finishing) {
-      const double magnitude = std::min(maximum_rpm, std::max(config.minimum_settle_rpm,
-          std::min(config.max_position_correction_rpm, config.position_kP * std::fabs(info.remaining_mm))));
+      const double magnitude = std::min(
+          maximum_rpm,
+          std::max(config.minimum_settle_rpm, std::min(config.max_position_correction_rpm,
+                                                       config.position_kP * std::fabs(info.remaining_mm))));
       requested = info.remaining_mm > 0 ? magnitude : -magnitude;
     } else {
       // 按实际剩余距离和实测速度提前减速，避免位置纠偏在减速段仍把目标维持在最高速。
-      const double toward_goal = std::max(0.0, (goal > 0 ? 1 : -1) *
-          (speed.left_rpm / 2.0 + speed.right_rpm / 2.0) * mm_s_per_rpm);
-      const double distance = std::max(0.0, std::fabs(info.remaining_mm) -
-          config.position_tolerance_mm - toward_goal * config.braking_delay_ms / 1000);
+      const double toward_goal =
+          std::max(0.0, (goal > 0 ? 1 : -1) * (speed.left_rpm / 2.0 + speed.right_rpm / 2.0) * mm_s_per_rpm);
+      const double distance = std::max(0.0, std::fabs(info.remaining_mm) - config.position_tolerance_mm -
+                                                toward_goal * config.braking_delay_ms / 1000);
       const double cap = std::sqrt(2 * config.deceleration_rpm_s * mm_s_per_rpm * distance) / mm_s_per_rpm;
       requested = Clamp(requested, cap);
     }
     // 到达位置窗口后直接制动，等实际速度也稳定；故障和松手同样立即制动。
-    info.target_rpm = near ? 0 : motion::limitVelocity(info.target_rpm,
-        requested, config.acceleration_rpm_s, config.deceleration_rpm_s, dt);
-    if (!std::isfinite(info.target_rpm)) return Fail("TP CONFIG");
+    info.target_rpm = near ? 0
+                           : motion::LimitVelocity(info.target_rpm, requested, config.acceleration_rpm_s,
+                                                   config.deceleration_rpm_s, dt);
+    if (!std::isfinite(info.target_rpm))
+      return Fail("TP CONFIG");
     return true;
   }
 
  private:
-  static bool Positive(double v) { return std::isfinite(v) && v > 0; }
-  static bool Nonnegative(double v) { return std::isfinite(v) && v >= 0; }
-  static double Clamp(double v, double limit) { return std::max(-limit, std::min(limit, v)); }
+  static bool Positive(double v) {
+    return std::isfinite(v) && v > 0;
+  }
+  static bool Nonnegative(double v) {
+    return std::isfinite(v) && v >= 0;
+  }
+  static double Clamp(double v, double limit) {
+    return std::max(-limit, std::min(limit, v));
+  }
   static bool Valid(const position_feedback& p, const velocity_feedback& v) {
     return p.valid && v.valid && std::isfinite(p.left_deg) && std::isfinite(p.right_deg) &&
-        std::isfinite(v.left_rpm) && std::isfinite(v.right_rpm);
+           std::isfinite(v.left_rpm) && std::isfinite(v.right_rpm);
   }
   void Finish(const char* status, int phase) {
-    info.running = false; info.target_rpm = 0; info.status = status; info.phase = phase;
+    info.running = false;
+    info.target_rpm = 0;
+    info.status = status;
+    info.phase = phase;
   }
-  bool Fail(const char* status) { Finish(status, 7); return false; }
+  bool Fail(const char* status) {
+    Finish(status, 7);
+    return false;
+  }
   trapezoid_config config;
   trapezoid_info info;
-  motion::TrapezoidProfile profile{0, 1, 1, 1};
+  motion::trapezoid_profile profile{0, 1, 1, 1};
   double origin_left = 0, origin_right = 0, mm_per_degree = 0, mm_s_per_rpm = 0;
   double maximum_rpm = 0, goal = 0, started_at = 0, previous_time = 0, settled_at = -1;
   bool finishing = false;

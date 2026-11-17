@@ -17,8 +17,8 @@ namespace config {
 #if BARTMOSS_HIGH_SPEED != 0 && BARTMOSS_HIGH_SPEED != 1
 #error Invalid high-speed environment
 #endif
-const char PROGRAM_VERSION[] = "2.1.0-point1";  // 接入位姿导航与单侧Swing，沿用原运动配置。
-const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
+const char PROGRAM_VERSION[] = "2.1.0-api1";  // 接入位姿导航与单侧Swing，沿用原运动配置。
+const char CONTROLLER_VERSION[] = "VLT";      // 遥控器标明纯电压版本。
 // 默认高速菜单；低速测试、比赛和标定可通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION
 #define BARTMOSS_COMPETITION 0
@@ -26,14 +26,16 @@ const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
 #ifndef BARTMOSS_CALIBRATION
 #define BARTMOSS_CALIBRATION 0
 #endif
-#if (BARTMOSS_COMPETITION != 0 && BARTMOSS_COMPETITION != 1) || (BARTMOSS_CALIBRATION != 0 && BARTMOSS_CALIBRATION != 1)
+#if (BARTMOSS_COMPETITION != 0 && BARTMOSS_COMPETITION != 1) || \
+    (BARTMOSS_CALIBRATION != 0 && BARTMOSS_CALIBRATION != 1)
 #error Invalid Bartmoss environment
 #endif
 #if (BARTMOSS_COMPETITION + BARTMOSS_CALIBRATION + BARTMOSS_HIGH_SPEED) > 1
 #error Select only one specialized environment
 #endif
-constexpr runtime::program_mode PROGRAM_MODE = BARTMOSS_COMPETITION ? runtime::program_mode::competition :
-    BARTMOSS_CALIBRATION ? runtime::program_mode::calibration : runtime::program_mode::test;
+constexpr runtime::program_mode PROGRAM_MODE = BARTMOSS_COMPETITION   ? runtime::program_mode::competition
+                                               : BARTMOSS_CALIBRATION ? runtime::program_mode::calibration
+                                                                      : runtime::program_mode::test;
 
 struct Motor {
   int port;
@@ -78,8 +80,8 @@ constexpr double DRIVE_WHEEL_DIAMETER_MM = 69.85;
 // 电机减速箱输出轴转数 / 轮子转数。直接连接为 1，外部再减速 3:1 为 3。
 constexpr double DRIVE_MOTOR_REVS_PER_WHEEL_REV = 36.0 / 30.0;
 constexpr double DRIVE_TRACK_WIDTH_MM = 325;  // 左右驱动轮接地中心线间距。
-constexpr double AUTO_TURN_KP = 1.6;  // rpm/deg；转向专用，直行航向增益不变。
-constexpr double AUTO_TURN_KD = 0.2;  // rpm/(deg/s)
+constexpr double AUTO_TURN_KP = 1.6;          // rpm/deg；转向专用，直行航向增益不变。
+constexpr double AUTO_TURN_KD = 0.2;          // rpm/(deg/s)
 constexpr double AUTO_ANGLE_TOLERANCE = 0.8;  // deg
 
 // 左摇杆上下控制前后运动；右摇杆左右控制转向。
@@ -121,10 +123,13 @@ const drive::feedforward_config FF_RIGHT_REVERSE = Feedforward(537.033135, 15.87
 inline drive::straight_config StraightControl() {
   drive::straight_config result;
   result.motion = StraightMotion();
+  result.max_heading_speed_fraction = 0.25;  // 独立的转速比例，航向电压比例在heading配置。
   result.heading = DRIVE_HEADING;
   result.pid = DRIVE_VELOCITY_PID;
-  result.left_forward = FF_LEFT; result.right_forward = FF_RIGHT;
-  result.left_reverse = FF_LEFT_REVERSE; result.right_reverse = FF_RIGHT_REVERSE;
+  result.left_forward = FF_LEFT;
+  result.right_forward = FF_RIGHT;
+  result.left_reverse = FF_LEFT_REVERSE;
+  result.right_reverse = FF_RIGHT_REVERSE;
   return result;
 }
 inline drive::turn_config TurnControl() {
@@ -132,19 +137,24 @@ inline drive::turn_config TurnControl() {
   result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
   result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
   result.track_width_mm = DRIVE_TRACK_WIDTH_MM;
-  result.kP = AUTO_TURN_KP; result.kD = AUTO_TURN_KD;
+  result.kP = AUTO_TURN_KP;
+  result.kD = AUTO_TURN_KD;
   result.angle_tolerance_deg = AUTO_ANGLE_TOLERANCE;
   result.pid = DRIVE_VELOCITY_PID;
   // 四轮/侧原地转动的阻力高于直行；仅转向放宽补偿并加快积分。
-  result.pid.kP = 20; result.pid.kI = 20;
-  result.pid.max_correction = 2000; result.pid.max_integral = 1200;
+  result.pid.kP = 20;
+  result.pid.kI = 20;
+  result.pid.max_correction_mV = 2000;
+  result.pid.max_integral_mV = 1200;
   result.correction_fraction = 3.0;
   result.acceleration_rpm_s = 360;
   result.minimum_settle_rpm = 18;  // 尾段加快，最后 6° 内渐变回 12 rpm。
   result.minimum_finish_rpm = 12;
   result.minimum_rate_deg_s = 16;
-  result.left_forward = FF_LEFT; result.right_forward = FF_RIGHT;
-  result.left_reverse = FF_LEFT_REVERSE; result.right_reverse = FF_RIGHT_REVERSE;
+  result.left_forward = FF_LEFT;
+  result.right_forward = FF_RIGHT;
+  result.left_reverse = FF_LEFT_REVERSE;
+  result.right_reverse = FF_RIGHT_REVERSE;
   return result;
 }
 inline drive::corner_config CornerControl() {
@@ -152,8 +162,8 @@ inline drive::corner_config CornerControl() {
   result.wheel_diameter_mm = DRIVE_WHEEL_DIAMETER_MM;
   result.motor_revs_per_wheel_rev = DRIVE_MOTOR_REVS_PER_WHEEL_REV;
   result.track_width_mm = DRIVE_TRACK_WIDTH_MM;
-  result.radius_mm = 250;      // 参考曲率峰值对应半径；曲率渐入渐出。
-  result.corner_rpm = 140;  // 弯内上限；实际按航向跟随情况降速，不能当作实车已验证速度。
+  result.radius_mm = 250;         // 参考曲率峰值对应半径；曲率渐入渐出。
+  result.corner_rpm = 140;        // 弯内上限；实际按航向跟随情况降速，不能当作实车已验证速度。
   result.corner_floor_rpm = 100;  // 入弯偏好及反馈降速下限；预测限速可以低于此值。
   result.prediction_enabled = true;
   result.prediction_wheel_acceleration_rpm_s = 180;  // 预测用目标变化上限，尚非实测机械极限。
@@ -170,8 +180,10 @@ inline drive::corner_config CornerControl() {
   result.finish_max_rpm = 30;
   result.finish_kP = 0.6;
   result.pid = TurnControl().pid;  // 整条连续路线使用同一个速度环，不在切点重置。
-  result.left_forward = FF_LEFT; result.right_forward = FF_RIGHT;
-  result.left_reverse = FF_LEFT_REVERSE; result.right_reverse = FF_RIGHT_REVERSE;
+  result.left_forward = FF_LEFT;
+  result.right_forward = FF_RIGHT;
+  result.left_reverse = FF_LEFT_REVERSE;
+  result.right_reverse = FF_RIGHT_REVERSE;
   return result;
 }
 const vex::brakeType BRAKE_MODE = vex::coast;

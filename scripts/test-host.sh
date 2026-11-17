@@ -30,6 +30,7 @@ run calibration-voltage tests/calibration-voltage-test.cpp
 run calibration-feedforward tests/calibration-feedforward-test.cpp
 run environments tests/program-mode-test.cpp
 run autonomous src/autonomous.cpp tests/autonomous-test.cpp
+run api-consistency src/autonomous.cpp tests/api-consistency-test.cpp
 run point-swing src/autonomous.cpp tests/point-swing-test.cpp
 run autonomous-turn src/autonomous.cpp tests/autonomous-turn-test.cpp
 run autonomous-corner src/autonomous.cpp tests/autonomous-corner-test.cpp

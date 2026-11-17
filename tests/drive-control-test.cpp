@@ -15,7 +15,7 @@ int main() {
   assert(!telemetry.Update(false, true));
   assert(telemetry.Update(true, true));
   assert(!telemetry.Update(false, false));  // 掉线立即停止回传。
-  assert(!telemetry.Update(true, true));  // 重连时按住 Y 不开始。
+  assert(!telemetry.Update(true, true));    // 重连时按住 Y 不开始。
   assert(!telemetry.Update(false, true));
   assert(telemetry.Update(true, true));
 
@@ -30,7 +30,8 @@ int main() {
   assert(value.velocity_valid && value.online_mask == 15);
   assert(value.rpm == 130 && value.raw_average_rpm == 130);
   assert(value.millivolts == 3000 && !value.acceleration_valid);
-  for (int i = 0; i < 4; ++i) motors[i].rpm += 60;
+  for (int i = 0; i < 4; ++i)
+    motors[i].rpm += 60;
   value = sampler.Update(motors, 20);
   assert(std::fabs(value.rpm - 150) < 1e-8);
   assert(std::fabs(value.acceleration - 1000) < 1e-8);
@@ -55,7 +56,8 @@ int main() {
   value = sampler.Update(motors, 520);
   assert(!value.velocity_valid && value.online_mask == 14);
   motors[0].rpm = -100;
-  for (int i = 1; i < 4; ++i) motors[i].rpm = -100;
+  for (int i = 1; i < 4; ++i)
+    motors[i].rpm = -100;
   value = sampler.Update(motors, 540);
   assert(value.rpm == -100 && !value.acceleration_valid);
   assert(!sampler.Update(motors, -1).velocity_valid);
@@ -69,36 +71,48 @@ int main() {
   }
   value = guarded.Update(motors, 0);
   assert(!value.encoder_velocity_valid && value.velocity_valid);
-  for (int i = 0; i < 4; ++i) motors[i].position_deg += 12; // 20 ms 内 12 度，即 100 rpm。
+  for (int i = 0; i < 4; ++i)
+    motors[i].position_deg += 12;  // 20 ms 内 12 度，即 100 rpm。
   value = guarded.Update(motors, 20);
   assert(value.encoder_velocity_valid && std::fabs(value.encoder_rpm - 100) < 1e-8);
   motors[3].rpm = -1510;
-  for (int i = 0; i < 4; ++i) motors[i].position_deg += 12;
+  for (int i = 0; i < 4; ++i)
+    motors[i].position_deg += 12;
   value = guarded.Update(motors, 40);
   assert(value.rejected_rpm_mask == 8 && value.raw_rpm[3] == -1510);
   assert(value.velocity_valid && std::fabs(value.rpm - 100) < 1e-8);
   assert(std::fabs(value.encoder_rpm - 100) < 1e-8);
-  for (int i = 0; i < 4; ++i) { motors[i].position_deg += 12; motors[i].rpm = 100; }
+  for (int i = 0; i < 4; ++i) {
+    motors[i].position_deg += 12;
+    motors[i].rpm = 100;
+  }
   value = guarded.Update(motors, 60);
   assert(value.rejected_rpm_mask == 0 && value.velocity_valid);
   motors[0].position_deg += 10000;
   value = guarded.Update(motors, 80);
-  assert(!value.encoder_velocity_valid); // 位置跳变也不能送入 TP。
+  assert(!value.encoder_velocity_valid);  // 位置跳变也不能送入 TP。
   drive::velocity_sampler no_fallback;
   motors[3].rpm = -1510;
   value = no_fallback.Update(motors, 0);
   assert(!value.velocity_valid && !value.encoder_velocity_valid && value.rejected_rpm_mask == 8);
   motors[3].rpm = 100;
   value = no_fallback.Update(motors, 400);
-  assert(!value.encoder_velocity_valid); // 长间隔不能差分出伪速度。
-  for (int i = 0; i < 4; ++i) { motors[i].position_deg -= 6; motors[i].rpm = -50; }
+  assert(!value.encoder_velocity_valid);  // 长间隔不能差分出伪速度。
+  for (int i = 0; i < 4; ++i) {
+    motors[i].position_deg -= 6;
+    motors[i].rpm = -50;
+  }
   value = no_fallback.Update(motors, 420);
   assert(value.encoder_velocity_valid && std::fabs(value.encoder_rpm + 50) < 1e-8);
   motors[1].online = false;
   assert(!no_fallback.Update(motors, 440).encoder_velocity_valid);
   drive::velocity_sampler parked;
-  for (int i = 0; i < 4; ++i) { motors[i].online = true; motors[i].rpm = 0; }
-  parked.Update(motors, 0); parked.Update(motors, 20);
+  for (int i = 0; i < 4; ++i) {
+    motors[i].online = true;
+    motors[i].rpm = 0;
+  }
+  parked.Update(motors, 0);
+  parked.Update(motors, 20);
   motors[3].rpm = -1510;
   value = parked.Update(motors, 40);
   assert(value.encoder_velocity_valid && value.encoder_rpm == 0);

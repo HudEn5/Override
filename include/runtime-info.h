@@ -16,8 +16,8 @@
 // 主循环发布整包状态，显示和回传线程只读取副本，不共享控制器实例。
 struct runtime_info {
   drive::pose pose;
-  manual::Input input;
-  manual::Output output;
+  manual::input input;
+  manual::output output;
   bool configured = false, enabled = false, telemetry = false, autonomous_period = false;
   bool route_debug = false;
   bool local_selection = false, controls_armed = false, auto_ready = false;

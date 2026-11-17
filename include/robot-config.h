@@ -24,8 +24,8 @@ extern vex::digital_out* TogglePiston;
 
 namespace hardware {
 bool Initialize();
-manual::Input ReadInput();
-void Apply(const manual::Output& output, bool manual_drive = true, bool brake_drive = false);
+manual::input ReadInput();
+void Apply(const manual::output& output, bool write_drive = true, bool brake_drive = false);
 void GetDriveMotorCount(int& left_count, int& right_count);
 drive::feedback ReadDriveFeedback();
 bool ReadDrivePosition(double& left_deg, double& right_deg);

@@ -27,8 +27,8 @@ void SamplingTask();
 void SetTelemetryEnabled(bool enabled);
 // 首次写底盘输出前调用；实际输出完成后必须用 PublishCommand 结束更新。
 void BeginCommandUpdate();
-void PublishCommand(int left_mV, int right_mV, bool enabled, bool manual_drive,
-                    int mode = 0, double target_rpm = 0.0);
+void PublishCommand(int left_mV, int right_mV, bool enabled, bool command_valid, int mode = 0,
+                    double target_rpm = 0.0);
 bool ReadLatestSample(sample& value);
 bool PopSample(sample& value, unsigned int& dropped);
 void PrintSample(const sample& value, unsigned int dropped);

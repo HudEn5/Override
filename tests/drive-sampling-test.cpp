@@ -14,8 +14,10 @@ std::function<void()> read_hook;
 
 void Sample(int count = 1) {
   wait_budget.store(count);
-  try { drive::SamplingTask(); }
-  catch (const stop_sampling&) {}
+  try {
+    drive::SamplingTask();
+  } catch (const stop_sampling&) {
+  }
 }
 
 drive::sample Latest() {
@@ -36,16 +38,20 @@ void Check(const drive::sample& value) {
 }
 
 namespace vex {
-double timer::time(timeUnits) { return clock_ms.fetch_add(10); }
+double timer::time(timeUnits) {
+  return clock_ms.fetch_add(10);
+}
 void wait(double, timeUnits) {
-  if (wait_budget.fetch_sub(1) <= 1) throw stop_sampling();
+  if (wait_budget.fetch_sub(1) <= 1)
+    throw stop_sampling();
   std::this_thread::yield();
 }
 }
 
 namespace hardware {
 drive::feedback ReadDriveFeedback() {
-  if (read_hook) read_hook();
+  if (read_hook)
+    read_hook();
   drive::feedback value;
   for (int i = 0; i < 4; ++i) {
     value.left[i].online = value.right[i].online = true;
@@ -100,7 +106,10 @@ int main() {
   drive::PublishCommand(0, 0, true, true, 2, 0);
   Sample();
   std::atomic<bool> done(false);
-  std::thread sampler([&] { Sample(30000); done.store(true); });
+  std::thread sampler([&] {
+    Sample(30000);
+    done.store(true);
+  });
   std::thread writer([] {
     for (int i = 1; i <= 30000; ++i) {
       drive::BeginCommandUpdate();
@@ -111,12 +120,18 @@ int main() {
     drive::sample value;
     unsigned int lost;
     while (!done.load()) {
-      if (drive::PopSample(value, lost)) Check(value);
+      if (drive::PopSample(value, lost))
+        Check(value);
       std::this_thread::yield();
     }
   });
-  while (!done.load()) { Check(Latest()); std::this_thread::yield(); }
-  writer.join(); sampler.join(); consumer.join();
+  while (!done.load()) {
+    Check(Latest());
+    std::this_thread::yield();
+  }
+  writer.join();
+  sampler.join();
+  consumer.join();
   Check(Latest());
   std::puts("Sampling concurrency checks passed: coherent snapshots, update windows and queue consumption.");
 }

@@ -29,7 +29,8 @@ vex::timer InertialTimer;
 bool inertial_calibration_started = false;
 
 bool RegisterPort(int port, bool required, bool (&used)[22]) {
-  if (port == 0 && !required) return true;
+  if (port == 0 && !required)
+    return true;
   if (port < 1 || port > 21) {
     Brain.Screen.print("Assign smart ports 1-21");
     return false;
@@ -43,7 +44,8 @@ bool RegisterPort(int port, bool required, bool (&used)[22]) {
 }
 
 vex::motor* CreateMotor(const config::Motor& setting, vex::brakeType brake) {
-  if (setting.port == 0) return nullptr;
+  if (setting.port == 0)
+    return nullptr;
   // SDK 端口索引从 0 开始；配置文件使用主控上标注的端口编号。
   vex::motor* motor = new vex::motor(setting.port - 1, setting.gear, setting.reversed);
   motor->setStopping(brake);
@@ -53,49 +55,77 @@ vex::motor* CreateMotor(const config::Motor& setting, vex::brakeType brake) {
 
 vex::triport::port& ThreeWirePort(char port) {
   switch (port) {
-    case 'A': return Brain.ThreeWirePort.A;
-    case 'B': return Brain.ThreeWirePort.B;
-    case 'C': return Brain.ThreeWirePort.C;
-    case 'D': return Brain.ThreeWirePort.D;
-    case 'E': return Brain.ThreeWirePort.E;
-    case 'F': return Brain.ThreeWirePort.F;
-    case 'G': return Brain.ThreeWirePort.G;
-    default: return Brain.ThreeWirePort.H;  // 仅在端口校验通过后调用。
+    case 'A':
+      return Brain.ThreeWirePort.A;
+    case 'B':
+      return Brain.ThreeWirePort.B;
+    case 'C':
+      return Brain.ThreeWirePort.C;
+    case 'D':
+      return Brain.ThreeWirePort.D;
+    case 'E':
+      return Brain.ThreeWirePort.E;
+    case 'F':
+      return Brain.ThreeWirePort.F;
+    case 'G':
+      return Brain.ThreeWirePort.G;
+    default:
+      return Brain.ThreeWirePort.H;  // 仅在端口校验通过后调用。
   }
 }
 
 int ReadAxis(int axis) {
   switch (axis) {
-    case 1: return Controller.Axis1.position();
-    case 2: return Controller.Axis2.position();
-    case 3: return Controller.Axis3.position();
-    case 4: return Controller.Axis4.position();
-    default: return 0;
+    case 1:
+      return Controller.Axis1.position();
+    case 2:
+      return Controller.Axis2.position();
+    case 3:
+      return Controller.Axis3.position();
+    case 4:
+      return Controller.Axis4.position();
+    default:
+      return 0;
   }
 }
 
 bool Pressed(config::Button button) {
   switch (button) {
-    case config::Button::R1: return Controller.ButtonR1.pressing();
-    case config::Button::R2: return Controller.ButtonR2.pressing();
-    case config::Button::L1: return Controller.ButtonL1.pressing();
-    case config::Button::L2: return Controller.ButtonL2.pressing();
-    case config::Button::A: return Controller.ButtonA.pressing();
-    case config::Button::B: return Controller.ButtonB.pressing();
-    case config::Button::X: return Controller.ButtonX.pressing();
-    case config::Button::Y: return Controller.ButtonY.pressing();
-    case config::Button::Up: return Controller.ButtonUp.pressing();
-    case config::Button::Down: return Controller.ButtonDown.pressing();
-    case config::Button::Left: return Controller.ButtonLeft.pressing();
-    case config::Button::Right: return Controller.ButtonRight.pressing();
+    case config::Button::R1:
+      return Controller.ButtonR1.pressing();
+    case config::Button::R2:
+      return Controller.ButtonR2.pressing();
+    case config::Button::L1:
+      return Controller.ButtonL1.pressing();
+    case config::Button::L2:
+      return Controller.ButtonL2.pressing();
+    case config::Button::A:
+      return Controller.ButtonA.pressing();
+    case config::Button::B:
+      return Controller.ButtonB.pressing();
+    case config::Button::X:
+      return Controller.ButtonX.pressing();
+    case config::Button::Y:
+      return Controller.ButtonY.pressing();
+    case config::Button::Up:
+      return Controller.ButtonUp.pressing();
+    case config::Button::Down:
+      return Controller.ButtonDown.pressing();
+    case config::Button::Left:
+      return Controller.ButtonLeft.pressing();
+    case config::Button::Right:
+      return Controller.ButtonRight.pressing();
   }
   return false;
 }
 
 void SetVoltage(vex::motor* motor, int millivolts) {
-  if (!motor) return;
-  if (millivolts == 0) motor->stop();
-  else motor->spin(vex::fwd, millivolts, vex::voltageUnits::mV);
+  if (!motor)
+    return;
+  if (millivolts == 0)
+    motor->stop();
+  else
+    motor->spin(vex::fwd, millivolts, vex::voltageUnits::mV);
 }
 }  // 匿名命名空间
 
@@ -106,12 +136,15 @@ bool Initialize() {
   Brain.Screen.setCursor(2, 1);
   for (int i = 0; i < 4; ++i) {
     if (!RegisterPort(config::LEFT_DRIVE[i].port, true, used) ||
-        !RegisterPort(config::RIGHT_DRIVE[i].port, true, used)) return false;
+        !RegisterPort(config::RIGHT_DRIVE[i].port, true, used))
+      return false;
   }
   for (int i = 0; i < 3; ++i) {
-    if (!RegisterPort(config::STRUCTURE_MOTORS[i].port, true, used)) return false;
+    if (!RegisterPort(config::STRUCTURE_MOTORS[i].port, true, used))
+      return false;
   }
-  if (!RegisterPort(config::INERTIAL_PORT, false, used)) return false;
+  if (!RegisterPort(config::INERTIAL_PORT, false, used))
+    return false;
 
   if (config::TogglePiston < 'A' || config::TogglePiston > 'H') {
     Brain.Screen.print("Invalid three-wire port");
@@ -145,8 +178,8 @@ bool Initialize() {
   return true;
 }
 
-manual::Input ReadInput() {
-  manual::Input input;
+manual::input ReadInput() {
+  manual::input input;
   input.y_axis = ReadAxis(config::YAxis);
   input.angular_axis = ReadAxis(config::AngularAxis);
   input.arm_ready = ArmL && ArmR && ArmL->installed() && ArmR->installed();
@@ -165,20 +198,24 @@ manual::Input ReadInput() {
   return input;
 }
 
-void Apply(const manual::Output& output, bool manual_drive, bool brake_drive) {
-  if (manual_drive) {
+void Apply(const manual::output& output, bool write_drive, bool brake_drive) {
+  if (write_drive) {
     for (int i = 0; i < 4; ++i) {
       // 测试停车直接刹车，避免先按普通手控停止方式再发一次刹车。
-      if (brake_drive && output.L_voltage == 0) {
-        if (*LeftDrive[i]) (*LeftDrive[i])->stop(vex::brake);
-      } else SetVoltage(*LeftDrive[i], output.L_voltage);
-      if (brake_drive && output.R_voltage == 0) {
-        if (*RightDrive[i]) (*RightDrive[i])->stop(vex::brake);
-      } else SetVoltage(*RightDrive[i], output.R_voltage);
+      if (brake_drive && output.left_mV == 0) {
+        if (*LeftDrive[i])
+          (*LeftDrive[i])->stop(vex::brake);
+      } else
+        SetVoltage(*LeftDrive[i], output.left_mV);
+      if (brake_drive && output.right_mV == 0) {
+        if (*RightDrive[i])
+          (*RightDrive[i])->stop(vex::brake);
+      } else
+        SetVoltage(*RightDrive[i], output.right_mV);
     }
   }
   const bool arm_ready = ArmL && ArmR && ArmL->installed() && ArmR->installed();
-  const int voltage = output.arm_enabled && arm_ready ? output.arm_voltage : 0;
+  const int voltage = output.arm_enabled && arm_ready ? output.arm_mV : 0;
   if (voltage != 0) {
     // 两台电机同周期接收电压，左右安装方向由各自的反转配置处理。
     ArmL->spin(vex::fwd, voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
@@ -186,19 +223,24 @@ void Apply(const manual::Output& output, bool manual_drive, bool brake_drive) {
     arm_moving = true;
   } else if (arm_moving) {
     // 仅在停止的瞬间记录内置 hold 位置，避免循环改写保持点。
-    if (ArmL) ArmL->stop(config::ARM_BRAKE_MODE);
-    if (ArmR) ArmR->stop(config::ARM_BRAKE_MODE);
+    if (ArmL)
+      ArmL->stop(config::ARM_BRAKE_MODE);
+    if (ArmR)
+      ArmR->stop(config::ARM_BRAKE_MODE);
     arm_moving = false;
   }
-  SetVoltage(Claw, output.claw_voltage);
-  if (TogglePiston) TogglePiston->set(output.toggle_piston);
+  SetVoltage(Claw, output.claw_mV);
+  if (TogglePiston)
+    TogglePiston->set(output.toggle_piston);
 }
 void GetDriveMotorCount(int& left_count, int& right_count) {
   left_count = 0;
   right_count = 0;
   for (int i = 0; i < 4; ++i) {
-    if (*LeftDrive[i] && (*LeftDrive[i])->installed()) ++left_count;
-    if (*RightDrive[i] && (*RightDrive[i])->installed()) ++right_count;
+    if (*LeftDrive[i] && (*LeftDrive[i])->installed())
+      ++left_count;
+    if (*RightDrive[i] && (*RightDrive[i])->installed())
+      ++right_count;
   }
 }
 
@@ -218,8 +260,8 @@ drive::feedback ReadDriveFeedback() {
         if (side == 0 && i < 2) {
           // 保留 LM 与同侧 LF 的独立位置、电流读数，便于和 SDK 转速交叉比较。
           values[side]->current_A = motors[side]->current(vex::amp);
-          values[side]->diagnostic_valid = values[side]->position_valid &&
-                                           std::isfinite(values[side]->current_A);
+          values[side]->diagnostic_valid =
+              values[side]->position_valid && std::isfinite(values[side]->current_A);
         }
       }
     }
@@ -233,11 +275,13 @@ bool ReadDrivePosition(double& left_deg, double& right_deg) {
   for (int i = 0; i < 4; ++i) {
     vex::motor* left = *LeftDrive[i];
     vex::motor* right = *RightDrive[i];
-    if (!left || !right || !left->installed() || !right->installed()) return false;
+    if (!left || !right || !left->installed() || !right->installed())
+      return false;
     left_sum += left->position(vex::deg);
     right_sum += right->position(vex::deg);
   }
-  if (!std::isfinite(left_sum) || !std::isfinite(right_sum)) return false;
+  if (!std::isfinite(left_sum) || !std::isfinite(right_sum))
+    return false;
   left_deg = left_sum / 4.0;
   right_deg = right_sum / 4.0;
   return true;
@@ -249,11 +293,13 @@ InertialState ReadInertial(double& rotation) {
     return InertialState::offline;
   }
   // 掉线或启动时未识别到传感器，需要重启程序完成静止校准。
-  if (!inertial_calibration_started) return InertialState::fault;
+  if (!inertial_calibration_started)
+    return InertialState::fault;
   const double elapsed = InertialTimer.time(vex::msec);
   if (Inertial->isCalibrating())
     return elapsed < 8000 ? InertialState::calibrating : InertialState::fault;
-  if (elapsed < 500) return InertialState::calibrating;
+  if (elapsed < 500)
+    return InertialState::calibrating;
   rotation = Inertial->rotation(vex::deg);
   return std::isfinite(rotation) ? InertialState::ready : InertialState::fault;
 }

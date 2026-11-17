@@ -7,7 +7,9 @@ runtime_info latest;
 vex::mutex snapshot_mutex;
 }
 void PublishRuntimeInfo(const runtime_info& value) {
-  snapshot_mutex.lock(); latest = value; snapshot_mutex.unlock();
+  snapshot_mutex.lock();
+  latest = value;
+  snapshot_mutex.unlock();
 }
 runtime_info ReadRuntimeInfo() {
   snapshot_mutex.lock();

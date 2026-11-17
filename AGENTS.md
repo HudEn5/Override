@@ -2,9 +2,9 @@
 
 ## 当前状态
 
-- 当前开发版本2.1.0-point1，分支feat/odometry，程序提交2249f44；main发布基线为92eba1f（2.0.6-route3），core-v2.0.0为历史标签。不要自动切回main或用远端覆盖开发分支。
+- 当前开发版本2.1.0-api1，分支feat/odometry，前一程序提交2249f44；main发布基线为92eba1f（2.0.6-route3），core-v2.0.0为历史标签。不要自动切回main或用远端覆盖开发分支。
 - 原路线为1500mm直行→原地逆时针90°→1500mm直行；新MoveToPoint与Swing只有注释示例，尚待实车验证。20个头文件、11个实现文件，避免继续拆分小配置文件。
-- 程序开发阶段34个C++程序与五种SDK构建已通过；整理复核出现autonomous-turn/startup-route间歇断言失败，尚未定位，详见LAB_NOTES，不能声称本轮全套通过。软件模型不等于实车验收。开发记录入口LAB_NOTES.md，阶段原始记录在docs/history。
+- api1阶段35个C++程序与五种SDK构建已通过；整理复核出现autonomous-turn/startup-route间歇断言失败，尚未定位，详见LAB_NOTES，不能声称本轮全套通过。软件模型不等于实车验收。开发记录入口LAB_NOTES.md，阶段原始记录在docs/history。
 
 ## 开始工作与同步
 
@@ -36,3 +36,5 @@
 - 用户明确自行从VS Code下载；助手不得自动下载或运行机器人。
 - 已验证下载description必须保留2026-2027 Bartmoss v1.7.0-highspeed。旧v1.6.0-tests描述曾触发vexcom 3221225477/0xC0000005，后改描述用户确认下载恢复；内部机制未查证，不凭猜测归因串口或工具链。
 - build保留活动产物、logs、data、backups、archive；临时试验目录不散放根目录。原始采集与未核实备份不随意删除；历史记录中的旧build路径可能已归档，按build/logs/workspace-cleanup.json查迁移清单。
+
+- api1统一内部命名/单位/格式、基础动作状态和路线结果，取消立即归零，ResetControl与ConfigurePID区分反馈重建；PointControl独立5mm/200ms，点位按距离收紧末端误差预算。路线函数和协议编号保留，不增加头文件。新api-consistency-test覆盖对应行为；历史间歇断言原因仍未定位，不能自动归因于本次修正。

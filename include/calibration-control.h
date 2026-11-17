@@ -23,11 +23,14 @@ struct calibration_info {
 class calibration_control {
  public:
   calibration_control(const int (&voltages)[3], double timeout_ms) : timeout(timeout_ms) {
-    for (int i = 0; i < 3; ++i) levels[i] = voltages[i];
+    for (int i = 0; i < 3; ++i)
+      levels[i] = voltages[i];
     info.millivolts = levels[0];
   }
 
-  const calibration_info& Info() const { return info; }
+  const calibration_info& Info() const {
+    return info;
+  }
 
   void ConfigureHeading(const drive::heading_config& config) {
     heading.Configure(config);
@@ -41,7 +44,8 @@ class calibration_control {
 
   void ConfigureFeedforward(const int (&rpm)[3], const drive::feedforward_config& left,
                             const drive::feedforward_config& right, double hold_ms) {
-    for (int i = 0; i < 3; ++i) targets[i] = rpm[i];
+    for (int i = 0; i < 3; ++i)
+      targets[i] = rpm[i];
     velocity.ConfigureForward(left, right);
     mode_hold_ms = hold_ms;
     info.selected_rpm = targets[ff_level];
@@ -53,9 +57,8 @@ class calibration_control {
     velocity.ConfigureReverse(left, right);
   }
 
-  bool Update(const manual::Input& input, manual::Output& output, bool allowed,
-              bool motors_online, double now_ms, bool stopped = true,
-              bool inertial_ready = false, double angle = 0.0,
+  bool Update(const manual::input& input, manual::output& output, bool allowed, bool motors_online,
+              double now_ms, bool stopped = true, bool inertial_ready = false, double angle = 0.0,
               const drive::velocity_feedback& speed = drive::velocity_feedback()) {
     velocity.Observe(speed, now_ms);
     const bool up = previous_allowed && input.test_next && !previous_up;
@@ -66,10 +69,11 @@ class calibration_control {
     previous_allowed = allowed && motors_online;
     info.target_rpm = 0.0;
     const bool held = input.test_positive || input.test_negative;
-    if (held || input.test_next || input.test_previous) info.visible = true;
+    if (held || input.test_next || input.test_previous)
+      info.visible = true;
 
     // 摇杆立即接回正常驾驶；按 A/B 先退出电压测试。
-    if (output.L_voltage != 0 || output.R_voltage != 0 || input.test_start || input.test_cancel) {
+    if (output.left_mV != 0 || output.right_mV != 0 || input.test_start || input.test_cancel) {
       info.visible = info.running = false;
       need_release = true;
       down_pending = false;
@@ -84,8 +88,9 @@ class calibration_control {
       ResetHeading();
       ResetSpeed();
       info.status = !allowed ? "DISABLED" : (!motors_online ? "MOTOR OFF" : "CLOCK ERR");
-      if (!allowed || !info.visible) return false;
-      output.L_voltage = output.R_voltage = 0;
+      if (!allowed || !info.visible)
+        return false;
+      output.left_mV = output.right_mV = 0;
       return true;
     }
 
@@ -104,7 +109,8 @@ class calibration_control {
         down_started_at = now_ms;
       }
       if (input.test_previous && down_pending) {
-        if (input.test_next || !stopped || now_ms < down_started_at) down_pending = false;
+        if (input.test_next || !stopped || now_ms < down_started_at)
+          down_pending = false;
         else if (!down_consumed && now_ms - down_started_at >= mode_hold_ms) {
           if (info.feedforward && velocity_configured && !info.speed_control)
             info.speed_control = true;
@@ -118,7 +124,8 @@ class calibration_control {
         }
       }
       int& selected_level = info.feedforward ? ff_level : level;
-      if (up && !input.test_previous && selected_level < 2) ++selected_level;
+      if (up && !input.test_previous && selected_level < 2)
+        ++selected_level;
       if (down_released) {
         if (down_pending && !down_consumed && !input.test_next && selected_level > 0)
           --selected_level;
@@ -155,11 +162,12 @@ class calibration_control {
       }
     }
 
-    if (!info.visible) return false;
-    output.L_voltage = output.R_voltage = 0;
+    if (!info.visible)
+      return false;
+    output.left_mV = output.right_mV = 0;
     const double target = direction * info.selected_rpm;
     if (info.running && info.feedforward) {
-      if (!velocity.Feedforward(target, target, output.L_voltage, output.R_voltage)) {
+      if (!velocity.Feedforward(target, target, output.left_mV, output.right_mV)) {
         info.running = false;
         need_release = true;
         info.status = "FF ERROR";
@@ -167,16 +175,16 @@ class calibration_control {
         info.target_rpm = target;
       }
     } else if (info.running) {
-      output.L_voltage = output.R_voltage = direction * info.millivolts;
+      output.left_mV = output.right_mV = direction * info.millivolts;
     }
     if (info.feedforward && info.heading_enabled) {
-      const bool valid = heading.Update(info.running, inertial_ready, angle, now_ms,
-                                        output.L_voltage, output.R_voltage);
+      const bool valid =
+          heading.Update(info.running, inertial_ready, angle, now_ms, output.left_mV, output.right_mV);
       info.heading = heading.Info();
       if (!valid) {
         info.running = false;
         need_release = true;
-        output.L_voltage = output.R_voltage = 0;
+        output.left_mV = output.right_mV = 0;
         info.target_rpm = 0.0;
         info.status = info.heading.ready ? "HDG ERROR" : "IMU WAIT";
       }
@@ -185,31 +193,33 @@ class calibration_control {
       if (!ApplySpeed(speed, now_ms, output)) {
         info.running = false;
         need_release = true;
-        output.L_voltage = output.R_voltage = 0;
+        output.left_mV = output.right_mV = 0;
         info.target_rpm = 0.0;
         info.status = "SPEED ERR";
         info.heading.active = false;
         ResetSpeed();
       }
-    } else ResetSpeed();
+    } else
+      ResetSpeed();
     return true;
   }
 
  private:
   void ResetHeading() {
-    heading.Reset(); info.heading = heading.Info();
+    heading.Reset();
+    info.heading = heading.Info();
   }
   void ResetSpeed() {
-    velocity.Reset(); info.velocity = velocity.Info();
+    velocity.ResetControl();
+    info.velocity = velocity.Info();
   }
-  bool ApplySpeed(const drive::velocity_feedback& speed, double now,
-                  manual::Output& output) {
+  bool ApplySpeed(const drive::velocity_feedback& speed, double now, manual::output& output) {
     // 外环的差速电压按当前运动方向的 kV 换算成两侧目标，内环跟踪它。
-    const double yaw = info.heading.active ? info.heading.correction : 0;
-    const double left_target = info.target_rpm - yaw / velocity.Slope(true, info.target_rpm);
-    const double right_target = info.target_rpm + yaw / velocity.Slope(false, info.target_rpm);
-    const bool valid = velocity.ApplyPID(left_target, right_target, speed, now,
-                                        output.L_voltage, output.R_voltage);
+    const double yaw = info.heading.active ? info.heading.correction_mV : 0;
+    const double left_target_rpm = info.target_rpm - yaw / velocity.Slope(true, info.target_rpm);
+    const double right_target_rpm = info.target_rpm + yaw / velocity.Slope(false, info.target_rpm);
+    const bool valid =
+        velocity.ApplyPID(left_target_rpm, right_target_rpm, speed, now, output.left_mV, output.right_mV);
     info.velocity = velocity.Info();
     return valid;
   }

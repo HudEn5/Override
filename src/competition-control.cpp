@@ -12,8 +12,12 @@ void Request(runtime::competition_stage stage) {
 }
 }  // 匿名命名空间
 
-void autonomous() { Request(runtime::competition_stage::autonomous); }
-void usercontrol() { Request(runtime::competition_stage::driver); }
+void autonomous() {
+  Request(runtime::competition_stage::autonomous);
+}
+void usercontrol() {
+  Request(runtime::competition_stage::driver);
+}
 
 void RegisterCompetitionCallbacks() {
   // 常驻控制/采样线程由 main 管理，比赛回调本身不创建子线程。

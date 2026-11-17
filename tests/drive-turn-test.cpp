@@ -7,7 +7,9 @@
 
 drive::turn_config Settings() {
   drive::turn_config c;
-  c.left_forward.kS = 400; c.left_forward.kV = 16; c.left_forward.calibrated = true;
+  c.left_forward.kS = 400;
+  c.left_forward.kV = 16;
+  c.left_forward.calibrated = true;
   c.right_forward = c.left_reverse = c.right_reverse = c.left_forward;
   return c;
 }
@@ -16,30 +18,43 @@ drive::straight_feedback Feedback(double now, double angle = 0, double left = 0,
   f.motors_online = f.inertial_ready = f.velocity.valid = true;
   f.stopped = std::fabs(left) < 5 && std::fabs(right) < 5;
   f.heading_deg = angle;
-  f.velocity.time_ms = now; f.velocity.sequence = static_cast<unsigned int>(now / 20 + 1);
-  f.velocity.left_rpm = left; f.velocity.right_rpm = right;
+  f.velocity.time_ms = now;
+  f.velocity.sequence = static_cast<unsigned int>(now / 20 + 1);
+  f.velocity.left_rpm = left;
+  f.velocity.right_rpm = right;
   return f;
 }
 double Motor(int voltage) {
-  return std::fabs(static_cast<double>(voltage)) <= 400 ? 0 :
-      (voltage > 0 ? voltage - 400 : voltage + 400) / 16.0;
+  return std::fabs(static_cast<double>(voltage)) <= 400
+             ? 0
+             : (voltage > 0 ? voltage - 400 : voltage + 400) / 16.0;
 }
-drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double friction, double maximum = 100, bool experiment = false) {
+drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double friction, double maximum = 100,
+                            bool experiment = false) {
   auto cfg = Settings();
   if (tuned) {
-    cfg.kP = 1.6; cfg.acceleration_rpm_s = 240; cfg.minimum_settle_rpm = 18;
-    cfg.minimum_finish_rpm = 12; cfg.minimum_rate_deg_s = 16;
+    cfg.kP = 1.6;
+    cfg.acceleration_rpm_s = 240;
+    cfg.minimum_settle_rpm = 18;
+    cfg.minimum_finish_rpm = 12;
+    cfg.minimum_rate_deg_s = 16;
     cfg.correction_fraction = 3;
-    cfg.pid.kP = 20; cfg.pid.kI = 20;
-    cfg.pid.max_correction = 2000; cfg.pid.max_integral = 1200;
+    cfg.pid.kP = 20;
+    cfg.pid.kI = 20;
+    cfg.pid.max_correction_mV = 2000;
+    cfg.pid.max_integral_mV = 1200;
   }
-  if (experiment) cfg = config::RouteTurnControl(cfg);
-  drive::turn_controller c; c.Configure(cfg);
-  c.Observe(Feedback(0), true, 0); assert(c.StartTurnRelative(delta, tuned ? maximum : 60));
+  if (experiment)
+    cfg = config::RouteTurnControl(cfg);
+  drive::turn_controller c;
+  c.Configure(cfg);
+  c.Observe(Feedback(0), true, 0);
+  assert(c.StartTurnRelative(delta, tuned ? maximum : 60));
   double angle = 0, left = 0, right = 0, previous_target = 0;
   const auto motor = [&](int mV, double speed) {
     const double v = std::fabs(static_cast<double>(mV));
-    if (std::fabs(speed) < 0.5 && v < breakaway) return 0.0;
+    if (std::fabs(speed) < 0.5 && v < breakaway)
+      return 0.0;
     return std::copysign(std::max(0.0, v - friction) / 16, mV);
   };
   for (int i = 1; i <= 600; ++i) {
@@ -47,23 +62,28 @@ drive::turn_info LoadedTurn(bool tuned, double delta, double breakaway, double f
     left += (motor(old.left_mV, left) - left) * 0.2;
     right += (motor(old.right_mV, right) - right) * 0.2;
     angle += (right - left) * 0.6 * 0.02;
-    c.Observe(Feedback(i * 20, angle, left, right), true, i * 20); c.UpdateTurn();
+    c.Observe(Feedback(i * 20, angle, left, right), true, i * 20);
+    c.UpdateTurn();
     const auto v = c.Info();
     assert(std::abs(v.left_mV) <= 12000 && std::abs(v.right_mV) <= 12000);
     assert(std::fabs(v.target_rpm) <= (tuned ? maximum : 60) + 1e-6);
     if (std::strcmp(v.status, "TURN") == 0) {
-      const double rate = cfg.profile_enabled ?
-          std::max(cfg.angular_acceleration_deg_s2, cfg.angular_deceleration_deg_s2) /
-              (6 * cfg.wheel_diameter_mm / cfg.motor_revs_per_wheel_rev / cfg.track_width_mm) : cfg.acceleration_rpm_s;
+      const double rate =
+          cfg.profile_enabled
+              ? std::max(cfg.angular_acceleration_deg_s2, cfg.angular_deceleration_deg_s2) /
+                    (6 * cfg.wheel_diameter_mm / cfg.motor_revs_per_wheel_rev / cfg.track_width_mm)
+              : cfg.acceleration_rpm_s;
       assert(std::fabs(v.target_rpm - previous_target) <= rate * 0.02 + 1e-6);
     }
     previous_target = v.target_rpm;
-    if (v.state != drive::turn_state::running) break;
+    if (v.state != drive::turn_state::running)
+      break;
   }
   return c.Info();
 }
 void Simulate(double delta) {
-  drive::turn_controller c; c.Configure(Settings());
+  drive::turn_controller c;
+  c.Configure(Settings());
   double angle = 350, left = 0, right = 0, previous_target = 0;
   c.Observe(Feedback(0, angle), true, 0);
   assert(c.StartTurnRelative(delta, 60));
@@ -73,7 +93,8 @@ void Simulate(double delta) {
     left += (Motor(old.left_mV) * 0.95 - left) * 0.2;
     right += (Motor(old.right_mV) * 1.03 - right) * 0.2;
     angle += (right - left) * 0.6 * 0.02;
-    c.Observe(Feedback(i * 20, angle, left, right), true, i * 20); c.UpdateTurn();
+    c.Observe(Feedback(i * 20, angle, left, right), true, i * 20);
+    c.UpdateTurn();
     const auto v = c.Info();
     assert(std::abs(v.left_mV) <= 12000 && std::abs(v.right_mV) <= 12000);
     assert(std::fabs(v.target_rpm) <= 60);
@@ -82,79 +103,124 @@ void Simulate(double delta) {
       assert(std::fabs(v.target_rpm - previous_target) <= 2.400001);
     previous_target = v.target_rpm;
     assert(v.state != drive::turn_state::error);
-    if (v.state == drive::turn_state::done) break;
+    if (v.state == drive::turn_state::done)
+      break;
   }
   assert(c.Info().state == drive::turn_state::done);
   assert(std::fabs(angle - (350 + delta)) <= 0.8);
   assert(c.Info().left_mV == 0 && c.Info().right_mV == 0);
   for (int i = 601; i < 620; ++i) {
-    c.Observe(Feedback(i * 20, angle + 2), true, i * 20); c.UpdateTurn();
+    c.Observe(Feedback(i * 20, angle + 2), true, i * 20);
+    c.UpdateTurn();
     assert(c.Info().state == drive::turn_state::done && c.Info().left_mV == 0);
   }
 }
 
 int main() {
-  double before_ms=0,after_ms=0;unsigned int experimental_turns=0;
-  for(double delta:{-120.,-90.,-30.,30.,90.,120.})for(double friction:{900.,1100.,1300.}){
-    const auto before=LoadedTurn(true,delta,friction+450,friction,140);
-    const auto after=LoadedTurn(true,delta,friction+450,friction,config::ROUTE_TURN_RPM,true);
-    if(after.state!=drive::turn_state::done)std::printf("Experimental turn failed: angle %.0f friction %.0f %s error %.3f\n",delta,friction,after.status,after.error_deg);
-    assert(before.state==drive::turn_state::done && after.state==drive::turn_state::done && std::fabs(after.error_deg)<=.8);
-    before_ms+=before.elapsed_ms;after_ms+=after.elapsed_ms;++experimental_turns;
-  }
-  std::printf("Experimental turn: %u paired cases, mean %.0f -> %.0f ms.\n",experimental_turns,before_ms/experimental_turns,after_ms/experimental_turns);
-  unsigned int configured_turns = 0;
-  for (double cap : {60.,100.,140.,200.}) for (double delta : {-120.,-90.,-30.,30.,90.,120.})
-    for (double friction : {900.,1100.,1300.}) {
-      const auto r = LoadedTurn(true, delta, friction + 450, friction, cap);
-      if (r.state != drive::turn_state::done)
-        std::printf("Route turn failed: cap %.0f delta %.0f friction %.0f %s error %.3f\n",cap,delta,friction,r.status,r.error_deg);
-      assert(r.state == drive::turn_state::done && std::fabs(r.error_deg) <= .8);
-      ++configured_turns;
+  double before_ms = 0, after_ms = 0;
+  unsigned int experimental_turns = 0;
+  for (double delta : {-120., -90., -30., 30., 90., 120.})
+    for (double friction : {900., 1100., 1300.}) {
+      const auto before = LoadedTurn(true, delta, friction + 450, friction, 140);
+      const auto after = LoadedTurn(true, delta, friction + 450, friction, config::ROUTE_TURN_RPM, true);
+      if (after.state != drive::turn_state::done)
+        std::printf("Experimental turn failed: angle %.0f friction %.0f %s error %.3f\n", delta, friction,
+                    after.status, after.error_deg);
+      assert(before.state == drive::turn_state::done && after.state == drive::turn_state::done &&
+             std::fabs(after.error_deg) <= .8);
+      before_ms += before.elapsed_ms;
+      after_ms += after.elapsed_ms;
+      ++experimental_turns;
     }
-  std::printf("Route turn caps passed: %u signed 30/90/120-degree, 60/100/140/200-rpm and friction cases.\n",configured_turns);
+  std::printf("Experimental turn: %u paired cases, mean %.0f -> %.0f ms.\n", experimental_turns,
+              before_ms / experimental_turns, after_ms / experimental_turns);
+  unsigned int configured_turns = 0;
+  for (double cap : {60., 100., 140., 200.})
+    for (double delta : {-120., -90., -30., 30., 90., 120.})
+      for (double friction : {900., 1100., 1300.}) {
+        const auto r = LoadedTurn(true, delta, friction + 450, friction, cap);
+        if (r.state != drive::turn_state::done)
+          std::printf("Route turn failed: cap %.0f delta %.0f friction %.0f %s error %.3f\n", cap, delta,
+                      friction, r.status, r.error_deg);
+        assert(r.state == drive::turn_state::done && std::fabs(r.error_deg) <= .8);
+        ++configured_turns;
+      }
+  std::printf("Route turn caps passed: %u signed 30/90/120-degree, 60/100/140/200-rpm and friction cases.\n",
+              configured_turns);
   const auto stalled = LoadedTurn(false, 90, 1550, 1100);
   assert(stalled.state == drive::turn_state::error && std::strcmp(stalled.status, "TIMEOUT") == 0);
   for (double friction : {900.0, 1100.0, 1300.0})
     for (double delta : {-180.0, -90.0, -5.0, 5.0, 90.0, 180.0}) {
       const auto r = LoadedTurn(true, delta, friction + 450, friction);
       if (r.state != drive::turn_state::done)
-        std::printf("Loaded turn failed: friction %.0f delta %.0f error %.2f status %s\n", friction, delta, r.error_deg, r.status);
+        std::printf("Loaded turn failed: friction %.0f delta %.0f error %.2f status %s\n", friction, delta,
+                    r.error_deg, r.status);
       assert(r.state == drive::turn_state::done && std::fabs(r.error_deg) <= 0.8);
     }
-  for (double delta : {0.0, 5.0, 45.0, 90.0, 180.0, 270.0, 360.0, -5.0, -90.0, -180.0, -360.0}) Simulate(delta);
-  drive::turn_controller c; c.Configure(Settings());
+  for (double delta : {0.0, 5.0, 45.0, 90.0, 180.0, 270.0, 360.0, -5.0, -90.0, -180.0, -360.0})
+    Simulate(delta);
+  drive::turn_controller c;
+  c.Configure(Settings());
   assert(!c.StartTurnRelative(90, 60));
-  c.Observe(Feedback(0, 350), true, 0); assert(c.StartTurnToHeading(10, 60));
+  c.Observe(Feedback(0, 350), true, 0);
+  assert(c.StartTurnToHeading(10, 60));
   assert(c.Info().target_deg == 370 && c.Info().error_deg == 20);
   assert(!c.StartTurnRelative(-90, 60) && c.Info().target_deg == 370);
-  c.CancelTurn(); assert(c.Info().state == drive::turn_state::cancelled && c.Info().left_mV == 0);
-  c.Observe(Feedback(20, 10), true, 20); assert(c.StartTurnToHeading(350, 60));
+  c.CancelTurn();
+  assert(c.Info().state == drive::turn_state::cancelled && c.Info().left_mV == 0);
+  c.Observe(Feedback(20, 10), true, 20);
+  assert(c.StartTurnToHeading(350, 60));
   assert(c.Info().target_deg == -10);
-  c.CancelTurn(); c.Observe(Feedback(40, 180), true, 40); assert(c.StartTurnToHeading(0, 60));
+  c.CancelTurn();
+  c.Observe(Feedback(40, 180), true, 40);
+  assert(c.StartTurnToHeading(0, 60));
   assert(c.Info().error_deg == 180);
-  c.CancelTurn(); assert(!c.StartTurnRelative(std::numeric_limits<double>::quiet_NaN(), 60));
-  assert(!c.StartTurnRelative(90, 0)); assert(!c.StartTurnRelative(90, 601));
+  c.CancelTurn();
+  assert(!c.StartTurnRelative(std::numeric_limits<double>::quiet_NaN(), 60));
+  assert(!c.StartTurnRelative(90, 0));
+  assert(!c.StartTurnRelative(90, 601));
   for (int fault = 0; fault < 7; ++fault) {
-    drive::turn_controller x; auto cfg = Settings(); cfg.timeout_ms = 80; x.Configure(cfg);
-    auto f = Feedback(0); x.Observe(f, true, 0); assert(x.StartTurnRelative(90, 60));
+    drive::turn_controller x;
+    auto cfg = Settings();
+    cfg.timeout_ms = 80;
+    x.Configure(cfg);
+    auto f = Feedback(0);
+    x.Observe(f, true, 0);
+    assert(x.StartTurnRelative(90, 60));
     double now = 20;
     f = Feedback(now);
-    if (fault == 0) f.motors_online = false;
-    if (fault == 1) f.inertial_ready = false;
-    if (fault == 2) f.velocity.valid = false;
-    if (fault == 3) f.heading_deg = std::numeric_limits<double>::quiet_NaN();
-    if (fault == 4) now = 240;  // 主循环异常长间隔。
-    if (fault == 5) now = 80;   // 惯导角不变也必须超时停止。
-    x.Observe(f, fault != 6, now); x.UpdateTurn();
+    if (fault == 0)
+      f.motors_online = false;
+    if (fault == 1)
+      f.inertial_ready = false;
+    if (fault == 2)
+      f.velocity.valid = false;
+    if (fault == 3)
+      f.heading_deg = std::numeric_limits<double>::quiet_NaN();
+    if (fault == 4)
+      now = 240;  // 主循环异常长间隔。
+    if (fault == 5)
+      now = 80;  // 惯导角不变也必须超时停止。
+    x.Observe(f, fault != 6, now);
+    x.UpdateTurn();
     assert(x.Info().state == drive::turn_state::error && x.Info().left_mV == 0 && x.Info().right_mV == 0);
-    x.Observe(Feedback(260), true, 260); x.UpdateTurn();
-    assert(x.Info().state == drive::turn_state::error); // 故障恢复不会自行重启。
+    x.Observe(Feedback(260), true, 260);
+    x.UpdateTurn();
+    assert(x.Info().state == drive::turn_state::error);  // 故障恢复不会自行重启。
   }
-  drive::turn_controller stale; stale.Configure(Settings());
-  auto f = Feedback(0); stale.Observe(f, true, 0); assert(stale.StartTurnRelative(90, 60));
-  stale.Observe(f, true, 120); stale.UpdateTurn(); assert(stale.Info().state == drive::turn_state::error);
-  drive::turn_controller moving; moving.Configure(Settings());
-  moving.Observe(Feedback(0, 0, 20, 20), true, 0); assert(!moving.StartTurnRelative(90, 60));
-  std::puts("Turn checks passed: voltage-driven bidirectional simulations, wrap, full rotations, slew, settle, busy and fault stops.");
+  drive::turn_controller stale;
+  stale.Configure(Settings());
+  auto f = Feedback(0);
+  stale.Observe(f, true, 0);
+  assert(stale.StartTurnRelative(90, 60));
+  stale.Observe(f, true, 120);
+  stale.UpdateTurn();
+  assert(stale.Info().state == drive::turn_state::error);
+  drive::turn_controller moving;
+  moving.Configure(Settings());
+  moving.Observe(Feedback(0, 0, 20, 20), true, 0);
+  assert(!moving.StartTurnRelative(90, 60));
+  std::puts(
+      "Turn checks passed: voltage-driven bidirectional simulations, wrap, full rotations, slew, settle, "
+      "busy and fault stops.");
 }

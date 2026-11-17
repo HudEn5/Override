@@ -3,12 +3,20 @@
 #include <cmath>
 
 namespace drive {
+enum class motion_state { idle, running, done, cancelled, error };
+struct point_config {
+  double position_tolerance_mm = 5;
+  double pose_stale_ms = 200;
+};
+
 // 默认静默；长按只切换一次，启动或重连时按住按钮也不会自动开始回传。
 class telemetry_switch {
  public:
   bool Update(bool pressed, bool connected) {
-    if (!connected) active = false;
-    else if (previous_connected && pressed && !previous_pressed) active = !active;
+    if (!connected)
+      active = false;
+    else if (previous_connected && pressed && !previous_pressed)
+      active = !active;
     previous_pressed = pressed;
     previous_connected = connected;
     return active;
@@ -42,7 +50,7 @@ struct side_sample {
   double raw_average_rpm = 0.0;
   double rpm = 0.0;
   double acceleration = 0.0;  // rpm/s
-  double millivolts = 0.0;   // 四台电机实测电压的平均值
+  double millivolts = 0.0;    // 四台电机实测电压的平均值
   bool acceleration_valid = false;
   unsigned int rejected_rpm_mask = 0;  // 原始 SDK 转速超量程/无效，原值仍用于诊断。
   bool encoder_velocity_valid = false;
@@ -69,21 +77,25 @@ class velocity_sampler {
     }
     encoder_valid = encoder_valid && positions_valid;
     previous_positions_valid = positions_valid && std::isfinite(time_ms) && time_ms >= 0;
-    for (int i = 0; i < 4; ++i) previous_positions[i] = motors[i].position_deg;
+    for (int i = 0; i < 4; ++i)
+      previous_positions[i] = motors[i].position_deg;
     if (encoder_valid) {
       double mean = 0;
-      for (int i = 0; i < 4; ++i) mean += encoder_raw[i] / 4.0;
-      if (!encoder_initialized) encoder_filtered_rpm = mean;
-      else encoder_filtered_rpm += dt / (0.02 + dt) * (mean - encoder_filtered_rpm);
+      for (int i = 0; i < 4; ++i)
+        mean += encoder_raw[i] / 4.0;
+      if (!encoder_initialized)
+        encoder_filtered_rpm = mean;
+      else
+        encoder_filtered_rpm += dt / (0.02 + dt) * (mean - encoder_filtered_rpm);
       encoder_initialized = true;
       result.encoder_velocity_valid = true;
       result.encoder_rpm = encoder_filtered_rpm;
-    } else encoder_initialized = false;
+    } else
+      encoder_initialized = false;
     double cleaned_average = 0;
     bool cleaned_valid = true;
     for (int i = 0; i < 4; ++i) {
-      if (motors[i].online && std::isfinite(motors[i].rpm) &&
-          std::isfinite(motors[i].millivolts)) {
+      if (motors[i].online && std::isfinite(motors[i].rpm) && std::isfinite(motors[i].millivolts)) {
         result.online_mask |= 1u << i;
         result.raw_rpm[i] = motors[i].rpm;
         result.raw_average_rpm += motors[i].rpm / 4.0;
@@ -93,10 +105,13 @@ class velocity_sampler {
       if (!std::isfinite(rpm) || std::fabs(rpm) > RPM_LIMIT) {
         result.rejected_rpm_mask |= 1u << i;
         // 只用真实位置变化替代异常值，不把它夹成 600 rpm，也不拿其他电机凑平均。
-        if (encoder_valid) rpm = encoder_raw[i];
-        else cleaned_valid = false;
+        if (encoder_valid)
+          rpm = encoder_raw[i];
+        else
+          cleaned_valid = false;
       }
-      if (std::isfinite(rpm)) cleaned_average += rpm / 4.0;
+      if (std::isfinite(rpm))
+        cleaned_average += rpm / 4.0;
     }
     // 整侧有效才计算平均速度，掉线时不把剩余电机误当成四台平均值。
     if (result.online_mask != 15 || !cleaned_valid || !std::isfinite(time_ms) || time_ms < 0) {
@@ -154,22 +169,22 @@ class motor_feedforward {
   feedforward_output Calculate(double velocity_rpm, double acceleration_rpm_s) const {
     feedforward_output result;
     if (!settings.calibrated || !std::isfinite(settings.kS) || settings.kS < 0 ||
-        !std::isfinite(settings.kV) || settings.kV <= 0 ||
-        !std::isfinite(settings.kA) || settings.kA < 0 ||
-        !std::isfinite(settings.max_voltage) || settings.max_voltage <= 0 ||
-        settings.max_voltage > 12000 || !std::isfinite(velocity_rpm) ||
-        !std::isfinite(acceleration_rpm_s)) return result;
+        !std::isfinite(settings.kV) || settings.kV <= 0 || !std::isfinite(settings.kA) || settings.kA < 0 ||
+        !std::isfinite(settings.max_voltage) || settings.max_voltage <= 0 || settings.max_voltage > 12000 ||
+        !std::isfinite(velocity_rpm) || !std::isfinite(acceleration_rpm_s))
+      return result;
     // 起步瞬间速度为零时按目标加速度判断静摩擦方向，静止目标输出为零。
-    const double direction_input = std::fabs(velocity_rpm) > 1e-6 ?
-                                   velocity_rpm : acceleration_rpm_s;
-    const double direction = direction_input > 1e-6 ? 1.0 :
-                             (direction_input < -1e-6 ? -1.0 : 0.0);
-    result.requested_mV = settings.kS * direction + settings.kV * velocity_rpm +
-                          settings.kA * acceleration_rpm_s;
-    if (!std::isfinite(result.requested_mV)) return feedforward_output();
+    const double direction_input = std::fabs(velocity_rpm) > 1e-6 ? velocity_rpm : acceleration_rpm_s;
+    const double direction = direction_input > 1e-6 ? 1.0 : (direction_input < -1e-6 ? -1.0 : 0.0);
+    result.requested_mV =
+        settings.kS * direction + settings.kV * velocity_rpm + settings.kA * acceleration_rpm_s;
+    if (!std::isfinite(result.requested_mV))
+      return feedforward_output();
     result.millivolts = result.requested_mV;
-    if (result.millivolts > settings.max_voltage) result.millivolts = settings.max_voltage;
-    if (result.millivolts < -settings.max_voltage) result.millivolts = -settings.max_voltage;
+    if (result.millivolts > settings.max_voltage)
+      result.millivolts = settings.max_voltage;
+    if (result.millivolts < -settings.max_voltage)
+      result.millivolts = -settings.max_voltage;
     result.saturated = result.millivolts != result.requested_mV;
     result.valid = true;
     return result;
@@ -190,7 +205,10 @@ class odometry {
   bool Configure(double wheel_diameter_mm, double motor_revs_per_wheel_rev, double track_width_mm);
   bool SetPose(double x_mm, double y_mm, double heading_deg);
   void Update(double left_deg, double right_deg, double imu_deg, double now_ms, bool ready);
-  const pose& Info() const { return value; }
+  const pose& Info() const {
+    return value;
+  }
+
  private:
   void Lose();
   pose value;
