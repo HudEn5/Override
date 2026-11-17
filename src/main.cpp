@@ -164,6 +164,7 @@ int main() {
     if (connected != route_field_owner) {
       Autonomous.Update(false, frame, now); route_field_owner = connected;
     }
+    Autonomous.ObservePose(Odometry.Info());
     Autonomous.Update(execute_route, frame, now);
     if (execute_route) {
       output.L_voltage = Autonomous.Info().left_mV; output.R_voltage = Autonomous.Info().right_mV;

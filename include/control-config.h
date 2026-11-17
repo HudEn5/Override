@@ -17,7 +17,7 @@ namespace config {
 #if BARTMOSS_HIGH_SPEED != 0 && BARTMOSS_HIGH_SPEED != 1
 #error Invalid high-speed environment
 #endif
-const char PROGRAM_VERSION[] = "2.1.0-turn3";  // 保留位姿观测，调整高速转向减速与尾段跟进。
+const char PROGRAM_VERSION[] = "2.1.0-point1";  // 接入位姿导航与单侧Swing，沿用原运动配置。
 const char CONTROLLER_VERSION[] = "VLT";  // 遥控器标明纯电压版本。
 // 默认高速菜单；低速测试、比赛和标定可通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION

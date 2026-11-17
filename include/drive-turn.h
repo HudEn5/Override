@@ -4,6 +4,8 @@
 #include "trapezoid-motion.h"
 
 namespace drive {
+enum class pivot_side { none, left, right };  // 固定并制动的一侧。
+
 enum class turn_state { idle, running, done, cancelled, error };
 
 struct turn_config {
@@ -38,6 +40,7 @@ struct turn_info {
   double time_ms = 0, elapsed_ms = 0;
   double angle_deg = 0, target_deg = 0, error_deg = 0, rate_deg_s = 0;
   double target_rpm = 0;  // 逆时针为正，左侧取负、右侧取正。
+  pivot_side pivot = pivot_side::none;
   bool profiled = false;
   double reference_deg = 0, reference_rate_deg_s = 0, profile_duration_ms = 0, profile_peak_deg_s = 0;
   int profile_phase = 0;  // 0未启用、1加速、2匀速、3减速、4末端纠偏。
@@ -63,6 +66,11 @@ class turn_controller {
   bool StartTurnRelative(double angle_deg, double maximum_rpm) {
     if (info.state == turn_state::running) return false;
     return Start(frame.heading_deg + angle_deg, maximum_rpm);
+  }
+  bool StartSwingRelative(double angle_deg, double maximum_rpm, pivot_side fixed) {
+    if (info.state == turn_state::running) return false;
+    if (fixed != pivot_side::left && fixed != pivot_side::right) return Fail("SWING CONFIG");
+    return Start(frame.heading_deg + angle_deg, maximum_rpm, fixed);
   }
   // 绝对朝向按最短方向转，跨越 0/360 正常处理；恰好 180 度选逆时针。
   bool StartTurnToHeading(double heading_deg, double maximum_rpm) {
@@ -148,12 +156,18 @@ class turn_controller {
       const double step = config.acceleration_rpm_s * dt_ms / 1000;
       info.target_rpm += Limit(requested - info.target_rpm, step);
     }
-    if (!Velocity.Feedforward(-info.target_rpm, info.target_rpm, info.left_mV, info.right_mV)) {
+    const double left_target = info.pivot == pivot_side::left ? 0 : -info.target_rpm;
+    const double right_target = info.pivot == pivot_side::right ? 0 : info.target_rpm;
+    if (!Velocity.Feedforward(left_target, right_target, info.left_mV, info.right_mV)) {
       Fail("FF ERROR"); return;
     }
-    if (!Velocity.ApplyPID(-info.target_rpm, info.target_rpm, frame.velocity, now,
+    if (!Velocity.ApplyPID(left_target, right_target, frame.velocity, now,
                            info.left_mV, info.right_mV, config.correction_fraction)) { Fail("SPEED ERR"); return; }
-    info.velocity = Velocity.Info(); info.status = "TURN";
+    info.velocity = Velocity.Info();
+    // 固定侧始终给零输出，由现有hardware::Apply主动brake；PID不能推着固定侧移动。
+    if (info.pivot == pivot_side::left) info.left_mV = 0;
+    if (info.pivot == pivot_side::right) info.right_mV = 0;
+    info.status = "TURN";
   }
   void CancelTurn() {
     if (info.state == turn_state::running) { info.state = turn_state::cancelled; info.status = "CANCEL"; }
@@ -165,7 +179,7 @@ class turn_controller {
   static double Limit(double value, double cap) { return std::max(-cap, std::min(cap, value)); }
   static bool Positive(double v) { return std::isfinite(v) && v > 0; }
   static bool Nonnegative(double v) { return std::isfinite(v) && v >= 0; }
-  bool Start(double target, double maximum_rpm) {
+  bool Start(double target, double maximum_rpm, pivot_side fixed = pivot_side::none) {
     if (!configured || !std::isfinite(target) || !Positive(maximum_rpm) || maximum_rpm > 600 ||
         !Positive(config.kP) || !Nonnegative(config.kD) || !Positive(config.acceleration_rpm_s) ||
         !Positive(config.angle_tolerance_deg) || !Positive(config.rate_tolerance_deg_s) ||
@@ -188,6 +202,7 @@ class turn_controller {
     info.angle_deg = previous_angle = frame.heading_deg; info.target_deg = target;
     info.error_deg = target - frame.heading_deg;
     if (!std::isfinite(info.error_deg)) return Fail("CONFIG");
+    info.pivot = fixed;
     start_angle = frame.heading_deg;
     info.profiled = config.profile_enabled;
     info.reference_deg = start_angle;
@@ -195,6 +210,7 @@ class turn_controller {
       // 原地转向两侧等速反向：角速度(deg/s) = 电机rpm × 6D/(传动比×轮距)。
       degrees_per_rpm = 6 * config.wheel_diameter_mm /
           config.motor_revs_per_wheel_rev / config.track_width_mm;
+      if (fixed != pivot_side::none) degrees_per_rpm /= 2; // 单侧运动的角速度为原地转向的一半。
       if (!Positive(degrees_per_rpm)) return Fail("CONFIG");
       Profile = motion::TrapezoidProfile(info.error_deg, maximum_rpm * degrees_per_rpm,
           config.angular_acceleration_deg_s2, config.angular_deceleration_deg_s2);

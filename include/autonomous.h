@@ -109,7 +109,7 @@ namespace route {
 constexpr double DEFAULT_DRIVE_RPM = config::ROUTE_DRIVE_RPM;
 constexpr double DEFAULT_TURN_RPM = config::ROUTE_TURN_RPM;
 constexpr double DEFAULT_PUSH_VOLTS = 4.0;
-enum class action { straight, turn, heading, corner, wait, push };
+enum class action { straight, turn, heading, corner, wait, push, point, swing };
 struct command {
   action kind;
   double first, second, third, speed;
@@ -128,6 +128,14 @@ inline command TurnToHeading(double heading_deg, double maximum_rpm = DEFAULT_TU
 inline command DriveCorner(double before_mm, double angle_deg, double after_mm,
                            double maximum_rpm = DEFAULT_DRIVE_RPM) {
   return {action::corner, before_mm, angle_deg, after_mm, maximum_rpm};
+}
+// 全局坐标mm；先朝向目标再直行。固定侧Swing正角仍为逆时针。
+inline command MoveToPoint(double x_mm, double y_mm, double maximum_rpm = DEFAULT_DRIVE_RPM,
+                           double turn_rpm = DEFAULT_TURN_RPM) {
+  return {action::point, x_mm, y_mm, turn_rpm, maximum_rpm};
+}
+inline command Swing(double angle_deg, drive::pivot_side fixed, double maximum_rpm = DEFAULT_TURN_RPM) {
+  return {action::swing, angle_deg, static_cast<double>(fixed), 0, maximum_rpm};
 }
 inline command Wait(double milliseconds) { return {action::wait, milliseconds, 0, 0, 0}; }
 // 只按时间前推用于机械定位；第二项可选，单位V；零时长跳过，单次最多5秒。
@@ -167,12 +175,14 @@ class autonomous_program {
   }
   void Configure(const drive::straight_config& value, const drive::turn_config& turn) {
     Chassis.Configure(value); Turning.Configure(turn);
+    point_tolerance = value.motion.position_tolerance_mm; point_stale_ms = turn.max_update_ms;
     Pushing.Configure(drive::push_config());
   }
   void Configure(const drive::straight_config& value, const drive::turn_config& turn, const drive::corner_config& corner) {
     Configure(value, turn); Cornering.Configure(corner);
   }
   void Update(bool permitted, const drive::straight_feedback& feedback, double now);
+  void ObservePose(const drive::pose& value) { position = value; } // 主循环传入，不跨线程取估计器。
   void CancelRoutine() { if (info.active) FinishRoutine("CANCEL"); }
   bool StartDriveStraight(double distance_mm, double maximum_rpm) {
     if (!info.active || Busy()) return false;
@@ -213,7 +223,7 @@ class autonomous_program {
   void RunRoute(std::initializer_list<route::command> commands);
   void FinishRoutine(const char* status = "DONE") {
     Chassis.CancelDriveStraight(); Turning.CancelTurn(); Cornering.CancelCorner();
-    Pushing.Cancel();
+    Pushing.Cancel(); point_phase = 0;
     info.active = false; info.finished = true; info.status = status;
     info.waiting = false;
     info.result = !std::strcmp(status, "DONE") || !std::strcmp(status, "EMPTY") ? 2 :
@@ -223,7 +233,12 @@ class autonomous_program {
     return Chassis.Info().state == drive::straight_state::running || Turning.Info().state == drive::turn_state::running ||
            Cornering.Info().state == drive::corner_state::running || Pushing.Info().state == drive::push_state::running;
   }
+  bool StartPoint(const route::command& command);
+  bool PointPoseReady() const;
   void Publish();
+  drive::pose position;
+  int point_phase = 0; // 1朝向、2直行；共用原转向和直行控制器。
+  double point_tolerance = 5, point_stale_ms = 200;
   drive::straight_controller Chassis;
   drive::turn_controller Turning;
   drive::corner_controller Cornering;

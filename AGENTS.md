@@ -1,5 +1,7 @@
 # Override 项目交接
 
+- 最新2.1.0-point1：route::MoveToPoint(x,y,直行rpm=540,转向rpm=540)通过ObservePose快照先相对转向再重算距离直行，点位终点复用5mm容差，定位无效/过期200ms或终点超差停车；不增加循环重试。route::Swing(角度,pivot_side::left/right,rpm=540)复用turn_controller，单侧角速度换算减半、固定侧输出始终0并brake。默认路线不变，仅注释示例；20头文件不增加，无新线程，唯一main写电机。新增组合/坐标零点/失效/左右正反模型，实车待验。
+
 - 最新本地候选2.1.0-turn3：依据旧实车尾段数据调整高速原地转向，仅改performance-config.h的角加速1200/角减速1000度每秒²、制动预留100ms、角速度滤波20ms、低速补偿阈值48度每秒、最低60/30rpm。原0.8度/零速门槛、自动0ms与X单项250ms确认不变；低速Test、直行、圆角及位姿不变。144组完整模型及144组SDK缓存模型通过，候选尚未下载/实车。前一份含位姿的本地基线f43a4d8；GitHub main仍92eba1f。
 
 - main基线2.0.6-route3已推送并核对远端92eba1f0ec2c7923323be5330e8f5db8ef05f707。当前开发分支feat/odometry，2.1.0-odom1：位姿仅旁路观察，原动作控制与参数不变；include由30合并为20个文件，无兼容空壳。位姿类型复用drive-control.h，实现src/odometry.cpp，主循环唯一写者，经runtime_info mutex发布，主控XYH及按需DPO回传；未实车验证、未加入MoveToPoint。
