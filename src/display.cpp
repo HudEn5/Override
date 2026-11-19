@@ -107,11 +107,12 @@ void ControllerInfoDisplay() {
         snprintf(lines[0], sizeof(lines[0]), "AUTO %s", info.automatic.status);
         snprintf(lines[1], sizeof(lines[1]), "STEP %u", info.automatic.step);
         snprintf(lines[2], sizeof(lines[2]), "%s LOG:%s",
-                 info.automatic.waiting                               ? "WAIT"
-                 : info.automatic.motion == autonomous_motion::corner ? info.automatic.corner.status
-                 : info.automatic.motion == autonomous_motion::push   ? info.automatic.push.status
-                 : info.automatic.motion == autonomous_motion::turn   ? info.automatic.turn.status
-                                                                      : info.automatic.drive.status,
+                 info.automatic.waiting                                ? "WAIT"
+                 : info.automatic.motion == autonomous_motion::rolling ? info.automatic.rolling.status
+                 : info.automatic.motion == autonomous_motion::corner  ? info.automatic.corner.status
+                 : info.automatic.motion == autonomous_motion::push    ? info.automatic.push.status
+                 : info.automatic.motion == autonomous_motion::turn    ? info.automatic.turn.status
+                                                                       : info.automatic.drive.status,
                  info.telemetry ? "ON" : "OFF");
         if (info.returning_to_manual)
           snprintf(lines[2], sizeof(lines[2]), "MANUAL IN %.1fs", info.return_remaining_ms / 1000);

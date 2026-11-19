@@ -7,6 +7,10 @@ void autonomous_program::RunRoutine() {
   if (info.step == 0) {
     assert(StartDriveCorner(500, 90, 500, 100));
     assert(!StartDriveStraight(100, 100) && !StartTurnRelative(90, 60));
+    assert(!StartRollingPath(nullptr, 0));
+    assert(!StartRollingDriveTurnDrive(100, 90, 100, 100, 150, 1000));
+    CancelRolling();
+    assert(CornerState() == drive::corner_state::running);
     info.step = 1;
   } else if (info.step == 1 && CornerState() == drive::corner_state::done) {
     assert(StartDriveStraight(100, 60));

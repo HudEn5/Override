@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, TURN_PROFILE_HEADER, CORNER_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER } from '../scripts/monitor-drive-websocket.mjs';
+import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, TURN_PROFILE_HEADER, CORNER_HEADER, ROLLING_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER } from '../scripts/monitor-drive-websocket.mjs';
 
 // 协议契约测试：模拟串口跨消息分片，不能将半行误写成完整样本。
 const received = [];
@@ -168,7 +168,7 @@ const routeDone = ['13','5500','1','3','3','0','1','0','2'];
 const routeStream = `#web#DRA,${routeRow.join(',')}\nDRA,${routeDone.join(',')}\n`;
 for (let i = 0; i < routeStream.length; i += 3) routeParser.push(routeStream.slice(i, i + 3));
 assert.equal(ROUTE_HEADER.split(',').length, 9); assert.deepEqual(routeRows, [routeRow, routeDone]);
-for (const [index, value] of [[3, '-1'], [4, '5'], [6, '1'], [7, '1.0'], [8, '5']]) {
+for (const [index, value] of [[3, '-1'], [4, '6'], [6, '1'], [7, '1.0'], [8, '5']]) {
   const bad = [...routeRow]; bad[index] = value; routeParser.push(`DRA,${bad.join(',')}\n`);
 }
 assert.equal(routeParser.routes, 2); assert.equal(routeParser.malformed, 5);
@@ -204,3 +204,37 @@ for (const [index, value] of [[0,'-1'],[1,'-1'],[2,'NaN'],[5,'2'],[6,'1']]) {
 poseParser.push('DPO,3,600,1,2,3,1\n');
 assert.equal(poseParser.poses, 3); assert.equal(poseParser.malformed, 6);
 console.log('Pose protocol passed: fragmented WAIT/OK/RESET, signed coordinates, invalid flags and truncated rows.');
+
+// 新移动转向与旧圆角分别记录；旧DCR的字段数/余量含义保留。
+assert.equal(ROLLING_HEADER.split(',').length, 18);
+const rollingRows = [];
+const rollingParser = new DriveLines(...Array(13).fill(() => {}), row => rollingRows.push(row));
+const rolling = [...corner, '2', '4'];
+const rollingStream = `DRL,${rolling.join(',')}\nDRA,12,5400,1,0,5,1,0,0,1\n`;
+for (let i = 0; i < rollingStream.length; i += 3) rollingParser.push(rollingStream.slice(i, i + 3));
+assert.deepEqual(rollingRows, [rolling]);
+assert.equal(rollingParser.rolling, 1);
+assert.equal(rollingParser.corners, 0);
+assert.equal(rollingParser.routes, 1);
+assert.equal(rollingParser.malformed, 0);
+for (const [index, value] of [[3,'5'],[4,'5'],[14,'12001'],[16,'5'],[17,'0'],[17,'1'],[6,'NaN']]) {
+  const bad = [...rolling]; bad[index] = value;
+  rollingParser.push(`DRL,${bad.join(',')}\n`);
+}
+rollingParser.push(`DRL,${corner.join(',')}\n`);
+assert.equal(rollingParser.malformed, 8);
+console.log('Rolling protocol checks passed: separate DRL fragments, motion=5 and invalid field rejection.');
+
+const rollingConfigError = [...corner, '0', '0'];
+rollingConfigError[4] = '4';
+rollingParser.push(`DRL,${rollingConfigError.join(',')}\n`);
+assert.equal(rollingParser.rolling, 2);
+assert.equal(rollingParser.malformed, 8);
+
+const sixteenTurns = [...rolling.slice(0, 16), '16', '16'];
+rollingParser.push(`DRL,${sixteenTurns.join(',')}\n`);
+assert.equal(rollingParser.rolling, 3);
+assert.equal(rollingParser.malformed, 8);
+const tooManyTurns = [...rolling.slice(0, 16), '0', '17'];
+rollingParser.push(`DRL,${tooManyTurns.join(',')}\n`);
+assert.equal(rollingParser.malformed, 9);

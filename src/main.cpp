@@ -135,7 +135,7 @@ int main() {
     const bool telemetry = Telemetry.Update(input.telemetry, access.telemetry);
     drive::SetTelemetryEnabled(telemetry);
     manual::output output = DriverControl.Update(
-        input, access.manual, config::JOYSTICK_DEADBAND, config::MAX_VOLTAGE, config::ARM_UP_VOLTAGE,
+        input, access.manual, config::JOYSTICK_DEADBAND, config::MANUAL_DRIVE_MAX_VOLTAGE, config::ARM_UP_VOLTAGE,
         config::ARM_DOWN_VOLTAGE, config::CLAW_VOLTAGE * config::CLAW_CLOSE_DIRECTION);
     drive::BeginCommandUpdate();
     bool test_owns_drive = false;
@@ -196,10 +196,11 @@ int main() {
       output.left_mV = Autonomous.Info().left_mV;
       output.right_mV = Autonomous.Info().right_mV;
       mode = 7;
-      target_rpm = Autonomous.Info().motion == autonomous_motion::corner ? Autonomous.Info().corner.center_rpm
-                   : Autonomous.Info().motion == autonomous_motion::turn
-                       ? Autonomous.Info().turn.target_rpm
-                       : Autonomous.Info().drive.motion.target_rpm;
+      target_rpm =
+          Autonomous.Info().motion == autonomous_motion::rolling  ? Autonomous.Info().rolling.center_rpm
+          : Autonomous.Info().motion == autonomous_motion::corner ? Autonomous.Info().corner.center_rpm
+          : Autonomous.Info().motion == autonomous_motion::turn   ? Autonomous.Info().turn.target_rpm
+                                                                  : Autonomous.Info().drive.motion.target_rpm;
     }
     if (inertial == hardware::InertialState::calibrating)
       output.left_mV = output.right_mV = 0;

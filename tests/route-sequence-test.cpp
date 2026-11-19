@@ -10,35 +10,38 @@ void autonomous_program::RunRoutine() {
   using namespace route;
   switch (scenario) {
     case 0:
-      RunRoute({DriveStraight(300), Wait(120), Turn(90), Wait(0), DriveStraight(-120), TurnToHeading(0),
-                DriveCorner(100, 90, 100)});
+      RunRoute({DriveStraight(300, route::DEFAULT_DRIVE_RPM, 100000), Wait(120, 100000),
+                Turn(90, route::DEFAULT_TURN_RPM, 100000), Wait(0, 100000),
+                DriveStraight(-120, route::DEFAULT_DRIVE_RPM, 100000),
+                TurnToHeading(0, route::DEFAULT_TURN_RPM, 100000),
+                DriveCorner(100, 90, 100, route::DEFAULT_DRIVE_RPM, 100000)});
       break;
     case 1:
-      RunRoute({Wait(std::numeric_limits<double>::quiet_NaN())});
+      RunRoute({Wait(std::numeric_limits<double>::quiet_NaN(), 100000)});
       break;
     case 2:
-      RunRoute({Wait(-1)});
+      RunRoute({Wait(-1, 100000)});
       break;
     case 3:
-      RunRoute({DriveStraight(std::numeric_limits<double>::quiet_NaN())});
+      RunRoute({DriveStraight(std::numeric_limits<double>::quiet_NaN(), route::DEFAULT_DRIVE_RPM, 100000)});
       break;
     case 4:
-      RunRoute({Wait(500)});
+      RunRoute({Wait(500, 100000)});
       break;
     case 5:
-      RunRoute({Turn(90, 601)});
+      RunRoute({Turn(90, 601, 100000)});
       break;
     case 6:
-      RunRoute({command(static_cast<action>(99))});
+      RunRoute({command(static_cast<action>(99), 1000)});
       break;
     case 7:
-      RunRoute({Wait(0), DriveStraight(0), Wait(0)});
+      RunRoute({Wait(0, 100000), DriveStraight(0, route::DEFAULT_DRIVE_RPM, 100000), Wait(0, 100000)});
       break;
     case 8:
       RunRoute({});
       break;
     case 9:
-      RunRoute({Wait(std::numeric_limits<double>::infinity())});
+      RunRoute({Wait(std::numeric_limits<double>::infinity(), 100000)});
       break;
   }
 }

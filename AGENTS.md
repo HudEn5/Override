@@ -2,9 +2,11 @@
 
 ## 当前状态
 
-- 当前开发版本2.1.0-api1，分支feat/odometry，前一程序提交2249f44；main发布基线为92eba1f（2.0.6-route3），core-v2.0.0为历史标签。不要自动切回main或用远端覆盖开发分支。
-- 原路线为1500mm直行→原地逆时针90°→1500mm直行；新MoveToPoint与Swing只有注释示例，尚待实车验证。20个头文件、11个实现文件，避免继续拆分小配置文件。
-- api1阶段35个C++程序与五种SDK构建已通过；整理复核出现autonomous-turn/startup-route间歇断言失败，尚未定位，详见LAB_NOTES，不能声称本轮全套通过。软件模型不等于实车验收。开发记录入口LAB_NOTES.md，阶段原始记录在docs/history。
+- 当前预发布版本2.1.0-beta.1，开发分支feat/odometry；用户已授权将当前程序上传GitHub并由助手定版本。旧main基线92eba1f（2.0.6-route3），core-v2.0.0为历史标签；发布时只允许快进，不强推，保留当前开发分支及用户编辑器改动。
+- 当前TEST_ROUTE=7，MoveToPoint(300,300,400,300,10000)修正候选待实车；原点位8.28mm推算终点超差记录保留。Swing新参数两侧各一轮DONE，均1273ms，停后误差约0.51/0.30度，重复性待验；多弯也有单轮DONE。
+- 手控独立6V上限，自动540电机rpm上限，21个头文件/11个实现文件。所有route动作显式timeout，A/B/X和场控权限不变；不要自动下载或启动机器人。
+- 宿主机38项入口及模型已分阶段检查，曾有间歇断言，单项复查通过但根因未定位。预发布不代表完整实车验收。日志入口LAB_NOTES.md，历史阶段参数勿当现用配置。
+
 
 ## 开始工作与同步
 
@@ -38,3 +40,27 @@
 - build保留活动产物、logs、data、backups、archive；临时试验目录不散放根目录。原始采集与未核实备份不随意删除；历史记录中的旧build路径可能已归档，按build/logs/workspace-cleanup.json查迁移清单。
 
 - api1统一内部命名/单位/格式、基础动作状态和路线结果，取消立即归零，ResetControl与ConfigurePID区分反馈重建；PointControl独立5mm/200ms，点位按距离收紧末端误差预算。路线函数和协议编号保留，不增加头文件。新api-consistency-test覆盖对应行为；历史间歇断言原因仍未定位，不能自动归因于本次修正。
+
+- 固定1500/90/1500基线测试在route-entry-test中定义；同文件另一编译实例CURRENT_ROUTE直接链接用户src/route.cpp检查启动/禁用。不要再把基线三段断言套在用户单条MoveToPoint路线上。用户已授权在route.cpp加入小范围高速路线；TEST_ROUTE=0保留600/600/400/300，1～6分别为往返、左L、右L、小正方形、原地转角、三点闭合。不得未经要求切换默认路线或改动底层参数。
+
+- 用户明确要求直行与转向职责分开：MoveToPoint仍先原地转向、再直行；直行保持固定航向，不按终点横向误差动态转向。已撤回point2的GuidePoint/SetPointSteering、位姿投影进度及相应配置。600/600高速终点偏移问题尚未修复，不得声称撤回后已达标。
+
+- ramp1按用户要求仅放缓路线直行斜率：ROUTE_STRAIGHT_ACCELERATION/DECELERATION=240/240电机rpm/s，原400/400；最高540电机/450轮端rpm保留。原地转向、低速/标定、H1～H4、圆角、速度PID/FF/航向保持增益及终点判据不改；case6与用户Wait保持。模型不能证明实车5mm达标，须复测。
+
+- ramp2针对case6第三次转向尾段近静止：PointControl.turn_finish_speed_scale=1.5，将点位按容差缩放的补角下限提高50%，最大不超过普通Turn最低补角配置；设1恢复旧行为。角度窗口/零速门槛/5mm容差不改，仍先转后直，无横向转向，无新增Wait。576组短远点位/方向/响应/阻力模型通过，普通转向配置不变，实车待验。
+
+- 用户明确要求多弯全程降速衔接，禁止替换原Turn；已移除RollingSquare专用接口，路线4用通用DriveTurnDrive显式编排，ROLLING_ROUTE=true连续/false原零速。DriveTurnDrive(before,angle,after,turn_mode::stop/rolling,entry_mm_s=150,maxrpm=540)默认stop；相邻rolling组合自动合并，后续before=0沿用上项after，双方非零相加。此授权不改变其他Turn/MoveToPoint语义；移动转向有额外位移，不保证全局5mm闭合。
+
+- structure1仅整理控制器边界：drive-rolling.h独立rolling_controller/rolling_info，drive-corner.h保留旧圆角与预测；不用布尔标记混选快照。info.motion为唯一调度选择源，corner=3/rolling=5，Busy与OwnershipValid防止冲突；CancelCorner/CancelRolling分别取消，全局结束用CancelAll。新DRL/rolling.csv的segment_remaining_mm为当前直段，旧DCR/corner.csv仍为整程余量，采集脚本兼容历史记录。运动参数、Turn与路线写法保持，本次不自动下载/推送。
+
+- chain1连续块最多16弯，固定容量且无堆分配；启动前验证全部后续参数，超限ROLL TOO LONG。每弯独立方向/上限/入角速度，从末端反推减速预算并正向限制短段加速；连续块内不重建PID/等待停车，仅末端验收。最后after必须>距离容差，否则ROLL END DIST；前/中间距离可0。Turn/Wait/stop或独立动作打断连续块并先停稳。DRA完成后按rolling_span推进命令数，内部进度用DRL计数。当前21个头文件、11个实现文件，无形状专用函数；实车待验证。
+
+- timeout1所有九种route工厂最后必填timeout_ms，移除全部前置默认参数，漏参必须编译失败；command构造也必填预算。预算必须有限>0，普通组合共享整项总计时，rolling每项从自身before起到turn/after结束，上一after完成才开始下一项before，最后一项包含停稳。超时TIMEOUT立即撤输出停止路线，后续不执行；内部控制器保护仍可更早失败。路线4每项显式5000ms，原参数不改，新预算待实车。宿主机入口新增route-timeout及9项漏参编译检查，总38程序。
+
+- 用户要求先实车测试MoveToPoint和Swing，路线7保留MoveToPoint(300,300,400,300,10000)，本轮实测POINT ERR（推算8.28mm超5mm）；左固定Swing已实测DONE（1524ms，停后约0.2度偏差，用户观察左轮未动）；右固定原配置1513ms/停后约0.54度，swing1复测1273ms/停后约0.30度；左固定新参数复测亦DONE（1273ms，停后约0.51度）；当前TEST_ROUTE保持8，左右各单轮新参数验证完成，重复性待验。新增8左固定+90/9右固定-90的单次Swing，均300rpm/5000ms；0～6路线原样保留。每次单动作验证，先点位后两侧Swing，用户自行下载，重复搬车复位需重启建立原点，勿把推算坐标当实测误差。
+
+- swing1用户要求整定Swing慢尾段，仅route::action::swing取config::SwingControl(turn_settings)：位置反馈尺度4（kP3→12、finish6→24）、角速度阻尼1.4（原0.1），原规划/最低轮速/0.8度精度及timeout不改。Turn/MTP/rolling不经过该配置；drive-turn.h源码保持。576配对模型1832→1761ms、最后6度457→417ms，有17组慢超过20ms；36缓存模型通过，实车待复测，不承诺减半。右侧新参数已单轮DONE并缩短240ms，左侧新参数亦DONE并缩短251ms，当前TEST_ROUTE保持8；左右各单轮，尚非重复性验收。
+
+- point3用户要求修MoveToPoint。转后按最新位姿复核目标方位，必要时在facing阶段重新原地对准，PointControl.max_heading_realignments=2（0旧行为对照，>2拒绝），上限后POINT ALIGN停车。直行固定航向/5mm判据/总timeout不改，不增加终点重试/横向转向/坐标改写；授权仅直行前对准。当前TEST_ROUTE=7，仍300/300/400/300/10000；Swing/Turn保持，实车待复测。
+
+- 用户要求手控底盘减半：MANUAL_DRIVE_MAX_VOLTAGE=6000只控制手控混控上限，改回12000恢复；MAX_VOLTAGE=12000仍供自动控制，机构不受影响。半电压不承诺实际半转速，默认构建已生成，用户自行下载。

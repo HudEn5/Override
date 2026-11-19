@@ -56,15 +56,16 @@ drive::turn_config Turn1Settings() {
   return c;
 }
 turn_result RunTurn(drive::turn_config cfg, double angle, double cap, double response = .25,
-                    double friction = 900, double width = 1, double right_response = .25,
-                    bool cached = false) {
+                    double friction = 900, double width = 1, double right_response = .25, bool cached = false,
+                    drive::pivot_side fixed = drive::pivot_side::none) {
   drive::turn_controller c;
   c.Configure(cfg);
   drive::straight_feedback f;
   f.velocity.valid = f.motors_online = f.inertial_ready = f.stopped = true;
   f.heading_deg = 350;
   c.Observe(f, true, 0);
-  assert(c.StartTurnRelative(angle, cap));
+  assert(fixed == drive::pivot_side::none ? c.StartTurnRelative(angle, cap)
+                                          : c.StartSwingRelative(angle, cap, fixed));
   const double rate_per_rpm = 6 * cfg.wheel_diameter_mm / cfg.motor_revs_per_wheel_rev / cfg.track_width_mm;
   const double dt = cached ? .01 : .02;
   const double left_response = cached ? 1 - std::sqrt(1 - response) : response;
@@ -102,10 +103,13 @@ turn_result RunTurn(drive::turn_config cfg, double angle, double cap, double res
                ? std::max(cfg.angular_acceleration_deg_s2, cfg.angular_deceleration_deg_s2)
            : std::fabs(v.target_rpm) > std::fabs(previous) ? cfg.angular_acceleration_deg_s2
                                                            : cfg.angular_deceleration_deg_s2);
-      assert(std::fabs(v.target_rpm - previous) <= budget / rate_per_rpm * dt + 1e-6);
+      const double conversion = fixed == drive::pivot_side::none ? rate_per_rpm : rate_per_rpm / 2;
+      assert(std::fabs(v.target_rpm - previous) <= budget / conversion * dt + 1e-6);
       assert(v.profile_phase >= 1 && v.profile_phase <= 4);
-      assert(std::fabs(v.reference_rate_deg_s) <= cap * rate_per_rpm + 1e-6);
+      assert(std::fabs(v.reference_rate_deg_s) <= cap * conversion + 1e-6);
     }
+    if (fixed != drive::pivot_side::none)
+      assert((fixed == drive::pivot_side::left ? v.left_mV : v.right_mV) == 0);
     previous = v.target_rpm;
     result.elapsed = v.elapsed_ms;
     result.error = v.error_deg;
@@ -283,7 +287,54 @@ void ProfileContracts() {
       "Angular profile contracts passed: references, slopes, geometry, faults, restart/wrap and unchanged "
       "outputs before finish correction.");
 }
+void CheckSwingTuning() {
+  const auto baseline = config::AutoTurnControl(TurnSettings());
+  const auto tuned = config::SwingControl(baseline);
+  assert(tuned.angle_tolerance_deg == baseline.angle_tolerance_deg &&
+         tuned.rate_tolerance_deg_s == baseline.rate_tolerance_deg_s &&
+         tuned.wheel_tolerance_rpm == baseline.wheel_tolerance_rpm && tuned.settle_ms == baseline.settle_ms &&
+         tuned.minimum_finish_rpm == baseline.minimum_finish_rpm &&
+         tuned.minimum_settle_rpm == baseline.minimum_settle_rpm &&
+         tuned.angular_acceleration_deg_s2 == baseline.angular_acceleration_deg_s2 &&
+         tuned.angular_deceleration_deg_s2 == baseline.angular_deceleration_deg_s2 &&
+         tuned.profile_braking_delay_ms == baseline.profile_braking_delay_ms);
+  const auto low = config::SwingControl(TurnSettings());
+  assert(low.kP == TurnSettings().kP && low.kD == TurnSettings().kD);
+  unsigned count = 0, slower = 0;
+  double old_time = 0, new_time = 0, old_tail = 0, new_tail = 0, max_error = 0;
+  for (auto fixed : {drive::pivot_side::left, drive::pivot_side::right})
+    for (double angle : {-150., -120., -90., -30., 30., 90., 120., 150.})
+      for (double cap : {100., 300.})
+        for (double friction : {0., 600., 900.})
+          for (int lag : {0, 1, 2})
+            for (double width : {.95, 1.05}) {
+              const double left = lag == 1 ? .12 : .25, right = lag == 2 ? .12 : .25;
+              const auto before = RunTurn(baseline, angle, cap, left, friction, width, right, false, fixed);
+              const auto after = RunTurn(tuned, angle, cap, left, friction, width, right, false, fixed);
+              assert(before.done && after.done && std::fabs(after.error) <= .8);
+              old_time += before.elapsed;
+              new_time += after.elapsed;
+              old_tail += before.elapsed - before.last_degrees_ms;
+              new_tail += after.elapsed - after.last_degrees_ms;
+              max_error = std::max(max_error, std::fabs(after.error));
+              slower += after.elapsed > before.elapsed + 20;
+              ++count;
+            }
+  assert(new_time < old_time && new_tail < old_tail);
+  for (auto fixed : {drive::pivot_side::left, drive::pivot_side::right})
+    for (double angle : {-150., -90., -30., 30., 90., 150.})
+      for (double cap : {100., 300., 540.}) {
+        const auto out = RunTurn(tuned, angle, cap, .12, 600, 1, .25, true, fixed);
+        assert(out.done && std::fabs(out.error) <= .8);
+      }
+  std::printf(
+      "Swing tuning: %u paired models mean %.0f -> %.0fms, last6deg %.0f -> %.0fms, max endpoint %.3fdeg, %u "
+      "slower; 36 cached models passed.\n",
+      count, old_time / count, new_time / count, old_tail / count, new_tail / count, max_error, slower);
+}
+
 int main(int argc, char**) {
+  CheckSwingTuning();
   if (!config::EXPERIMENTAL_FAST_ROUTE || !config::TURN_ANGULAR_PROFILE) {
     assert(!config::RouteTurnControl(TurnSettings()).profile_enabled);
     std::puts("Angular profile disabled by configuration; legacy turn regression remains enabled.");

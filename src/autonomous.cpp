@@ -13,6 +13,7 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
   Chassis.Observe(feedback, permitted, now);
   Turning.Observe(feedback, permitted, now);
   Cornering.Observe(feedback, permitted, now);
+  Rolling.Observe(feedback, permitted, now);
   Pushing.Observe(feedback, permitted, now);
   if (!permitted) {
     if (info.active)
@@ -26,6 +27,7 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
     Chassis.Reset();
     Turning.Reset();
     Cornering.Reset();
+    Rolling.Reset();
     info.motion = autonomous_motion::none;
     Pushing.Reset();
     info.active = true;
@@ -34,6 +36,7 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
     ++info.run;
     point_stage = point_phase::idle;
     route_step_started = false;
+    rolling_span = 1;
     info.waiting = false;
     info.result = route_result::running;
     waiting_ready = true;
@@ -54,36 +57,36 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
     Publish();
     return;
   }
-  if (info.motion == autonomous_motion::straight) {
-    Chassis.UpdateDriveStraight();
-    if (Chassis.Info().state == drive::straight_state::error ||
-        Chassis.Info().state == drive::straight_state::cancelled)
-      FinishRoutine(Chassis.Info().status, Chassis.Info().state == drive::straight_state::cancelled
-                                               ? route_result::cancelled
-                                               : route_result::error);
-  } else if (info.motion == autonomous_motion::turn) {
-    Turning.UpdateTurn();
-    if (Turning.Info().state == drive::turn_state::error ||
-        Turning.Info().state == drive::turn_state::cancelled)
-      FinishRoutine(Turning.Info().status, Turning.Info().state == drive::turn_state::cancelled
-                                               ? route_result::cancelled
-                                               : route_result::error);
-  } else if (info.motion == autonomous_motion::corner) {
-    Cornering.UpdateCorner();
-    if (Cornering.Info().state == drive::corner_state::error ||
-        Cornering.Info().state == drive::corner_state::cancelled)
-      FinishRoutine(Cornering.Info().status, Cornering.Info().state == drive::corner_state::cancelled
-                                                 ? route_result::cancelled
-                                                 : route_result::error);
-  } else if (info.motion == autonomous_motion::push) {
-    Pushing.Update();
-    if (PushState() == drive::push_state::error || PushState() == drive::push_state::cancelled)
-      FinishRoutine(Pushing.Info().status, Pushing.Info().state == drive::push_state::cancelled
-                                               ? route_result::cancelled
-                                               : route_result::error);
+  if (!OwnershipValid()) {
+    FinishRoutine("CONTROL OWNER");
+    return;
   }
+  switch (info.motion) {
+    case autonomous_motion::straight:
+      Chassis.UpdateDriveStraight();
+      break;
+    case autonomous_motion::turn:
+      Turning.UpdateTurn();
+      break;
+    case autonomous_motion::corner:
+      Cornering.UpdateCorner();
+      break;
+    case autonomous_motion::rolling:
+      Rolling.Update();
+      break;
+    case autonomous_motion::push:
+      Pushing.Update();
+      break;
+    case autonomous_motion::none:
+      break;
+  }
+  if (ActiveState() == drive::motion_state::error || ActiveState() == drive::motion_state::cancelled)
+    FinishRoutine(ActiveStatus(), ActiveState() == drive::motion_state::cancelled ? route_result::cancelled
+                                                                                  : route_result::error);
   if (info.active)
     RunRoutine();
+  if (!OwnershipValid())
+    FinishRoutine("CONTROL OWNER");
   Publish();
 }
 
@@ -96,8 +99,46 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
   while (info.active && info.step < commands.size()) {
     const auto& command = *(commands.begin() + info.step);
     if (!route_step_started) {
+      if (!std::isfinite(command.timeout_ms) || command.timeout_ms <= 0) {
+        FinishRoutine("TIMEOUT CONFIG");
+        return;
+      }
+      action_started_at = route_time;
       bool started = false;
       switch (command.kind) {
+        case route::action::drive_turn_drive:
+          if (!std::isfinite(command.before_mm) || command.before_mm < 0 ||
+              !std::isfinite(command.after_mm) || command.after_mm < 0 || !std::isfinite(command.angle_deg) ||
+              std::fabs(command.angle_deg) > 180) {
+            FinishRoutine("ROUTE CONFIG");
+            return;
+          }
+          transfer_phase = 0;
+          if (command.transition == route::turn_mode::stop) {
+            started = StartDriveStraight(command.before_mm, command.maximum_rpm);
+          } else if (command.transition == route::turn_mode::rolling) {
+            drive::rolling_leg legs[drive::MAX_ROLLING_TURNS];
+            rolling_span = 0;
+            for (unsigned index = info.step; index < commands.size(); ++index) {
+              const auto& next = *(commands.begin() + index);
+              if (next.kind != route::action::drive_turn_drive ||
+                  next.transition != route::turn_mode::rolling)
+                break;
+              if (rolling_span == drive::MAX_ROLLING_TURNS) {
+                FinishRoutine("ROLL TOO LONG");
+                return;
+              }
+              auto& leg = legs[rolling_span++];
+              leg.before_mm = next.before_mm;
+              leg.angle_deg = next.angle_deg;
+              leg.after_mm = next.after_mm;
+              leg.maximum_rpm = next.maximum_rpm;
+              leg.entry_mm_s = next.entry_speed_mm_s;
+              leg.timeout_ms = next.timeout_ms;
+            }
+            started = StartRollingPath(legs, rolling_span);
+          }
+          break;
         case route::action::straight:
           started = StartDriveStraight(command.distance_mm, command.maximum_rpm);
           break;
@@ -112,11 +153,12 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
               StartDriveCorner(command.before_mm, command.angle_deg, command.after_mm, command.maximum_rpm);
           break;
         case route::action::point:
+          point_realignments = 0;
           started = StartPoint(command);
           break;
         case route::action::swing:
           info.motion = autonomous_motion::turn;
-          Turning.Configure(turn_settings);
+          Turning.Configure(config::SwingControl(turn_settings));
           Turning.Observe(frame, true, route_time);
           started = Turning.StartSwingRelative(command.angle_deg, command.maximum_rpm, command.fixed_side);
           break;
@@ -140,12 +182,7 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
       if (!started) {
         if (!info.active)
           return;
-        const char* error = info.motion == autonomous_motion::straight ? Chassis.Info().status
-                            : info.motion == autonomous_motion::turn   ? Turning.Info().status
-                            : info.motion == autonomous_motion::corner ? Cornering.Info().status
-                            : info.motion == autonomous_motion::push   ? Pushing.Info().status
-                                                                       : "ROUTE CONFIG";
-        FinishRoutine(error);
+        FinishRoutine(ActiveStatus());
         return;
       }
       route_step_started = true;
@@ -154,18 +191,26 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
     if (command.kind == route::action::wait) {
       info.status = "WAIT";
       done = route_time - wait_started >= command.duration_ms;
-    } else if (info.motion == autonomous_motion::straight) {
-      info.status = Chassis.Info().status;
-      done = DriveStraightState() == drive::straight_state::done;
-    } else if (info.motion == autonomous_motion::turn) {
-      info.status = Turning.Info().status;
-      done = TurnState() == drive::turn_state::done;
-    } else if (info.motion == autonomous_motion::corner) {
-      info.status = Cornering.Info().status;
-      done = CornerState() == drive::corner_state::done;
-    } else if (info.motion == autonomous_motion::push) {
-      info.status = Pushing.Info().status;
-      done = PushState() == drive::push_state::done;
+    } else {
+      info.status = ActiveStatus();
+      done = ActiveState() == drive::motion_state::done;
+    }
+    // 组合阶段不重置总计时；rolling块内由执行器逐命令计时。
+    const bool rolling =
+        command.kind == route::action::drive_turn_drive && command.transition == route::turn_mode::rolling;
+    const double elapsed = route_time - action_started_at;
+    if (!rolling && (elapsed > command.timeout_ms || (!done && elapsed >= command.timeout_ms))) {
+      FinishRoutine("TIMEOUT");
+      return;
+    }
+    if (command.kind == route::action::drive_turn_drive && command.transition == route::turn_mode::stop &&
+        done && transfer_phase < 2) {
+      ++transfer_phase;
+      const bool started = transfer_phase == 1 ? StartTurnRelative(command.angle_deg, command.maximum_rpm)
+                                               : StartDriveStraight(command.after_mm, command.maximum_rpm);
+      if (!started)
+        FinishRoutine(transfer_phase == 1 ? Turning.Info().status : Chassis.Info().status);
+      return;
     }
     if (command.kind == route::action::point && done) {
       if (!PointPoseReady()) {
@@ -176,6 +221,19 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
       if (distance <= point_settings.position_tolerance_mm) {
         point_stage = point_phase::idle;
       } else if (point_stage == point_phase::facing) {
+        // 原地转向也可能让中心移动；启动直行前按最新位置复核目标方位。
+        // 只在转向阶段重新对准，不给直行增加横向反馈或在终点绕回。
+        if (point_settings.max_heading_realignments > 0 &&
+            std::fabs(PointBearingError(command)) > PointTurnTolerance(distance)) {
+          if (point_realignments >= point_settings.max_heading_realignments) {
+            FinishRoutine("POINT ALIGN");
+            return;
+          }
+          ++point_realignments;
+          if (!StartPoint(command) && info.active)
+            FinishRoutine(Turning.Info().status);
+          return;
+        }
         auto settings = straight_settings;
         settings.motion.position_tolerance_mm =
             std::min(settings.motion.position_tolerance_mm, point_settings.position_tolerance_mm / 2);
@@ -197,7 +255,10 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
     }
     if (!done)
       return;
-    ++info.step;
+    info.step +=
+        command.kind == route::action::drive_turn_drive && command.transition == route::turn_mode::rolling
+            ? rolling_span
+            : 1;
     route_step_started = false;
     info.waiting = false;
   }
@@ -209,19 +270,88 @@ void autonomous_program::Publish() {
   info.drive = Chassis.Info();
   info.turn = Turning.Info();
   info.corner = Cornering.Info();
+  info.rolling = Rolling.Info();
   info.push = Pushing.Info();
-  info.left_mV = info.active ? (info.motion == autonomous_motion::corner     ? info.corner.left_mV
-                                : info.motion == autonomous_motion::turn     ? info.turn.left_mV
-                                : info.motion == autonomous_motion::push     ? info.push.left_mV
-                                : info.motion == autonomous_motion::straight ? info.drive.left_mV
-                                                                             : 0)
-                             : 0;
-  info.right_mV = info.active ? (info.motion == autonomous_motion::corner     ? info.corner.right_mV
-                                 : info.motion == autonomous_motion::turn     ? info.turn.right_mV
-                                 : info.motion == autonomous_motion::push     ? info.push.right_mV
-                                 : info.motion == autonomous_motion::straight ? info.drive.right_mV
-                                                                              : 0)
-                              : 0;
+  info.left_mV = info.right_mV = 0;
+  if (!info.active)
+    return;
+  switch (info.motion) {
+    case autonomous_motion::straight:
+      info.left_mV = info.drive.left_mV;
+      info.right_mV = info.drive.right_mV;
+      break;
+    case autonomous_motion::turn:
+      info.left_mV = info.turn.left_mV;
+      info.right_mV = info.turn.right_mV;
+      break;
+    case autonomous_motion::corner:
+      info.left_mV = info.corner.left_mV;
+      info.right_mV = info.corner.right_mV;
+      break;
+    case autonomous_motion::rolling:
+      info.left_mV = info.rolling.left_mV;
+      info.right_mV = info.rolling.right_mV;
+      break;
+    case autonomous_motion::push:
+      info.left_mV = info.push.left_mV;
+      info.right_mV = info.push.right_mV;
+      break;
+    case autonomous_motion::none:
+      break;
+  }
+}
+
+drive::motion_state autonomous_program::ActiveState() const {
+  switch (info.motion) {
+    case autonomous_motion::straight:
+      return Chassis.Info().state;
+    case autonomous_motion::turn:
+      return Turning.Info().state;
+    case autonomous_motion::corner:
+      return Cornering.Info().state;
+    case autonomous_motion::rolling:
+      return Rolling.Info().state;
+    case autonomous_motion::push:
+      return Pushing.Info().state;
+    case autonomous_motion::none:
+      return drive::motion_state::idle;
+  }
+  return drive::motion_state::error;
+}
+
+const char* autonomous_program::ActiveStatus() const {
+  switch (info.motion) {
+    case autonomous_motion::straight:
+      return Chassis.Info().status;
+    case autonomous_motion::turn:
+      return Turning.Info().status;
+    case autonomous_motion::corner:
+      return Cornering.Info().status;
+    case autonomous_motion::rolling:
+      return Rolling.Info().status;
+    case autonomous_motion::push:
+      return Pushing.Info().status;
+    case autonomous_motion::none:
+      return "ROUTE CONFIG";
+  }
+  return "CONTROL OWNER";
+}
+
+bool autonomous_program::OwnershipValid() const {
+  using drive::motion_state;
+  return (Chassis.Info().state != motion_state::running || info.motion == autonomous_motion::straight) &&
+         (Turning.Info().state != motion_state::running || info.motion == autonomous_motion::turn) &&
+         (Cornering.Info().state != motion_state::running || info.motion == autonomous_motion::corner) &&
+         (Rolling.Info().state != motion_state::running || info.motion == autonomous_motion::rolling) &&
+         (Pushing.Info().state != motion_state::running || info.motion == autonomous_motion::push);
+}
+
+void autonomous_program::CancelAll() {
+  Chassis.CancelDriveStraight();
+  Turning.CancelTurn();
+  Cornering.CancelCorner();
+  Rolling.Cancel();
+  Pushing.Cancel();
 }
 
 // 位姿与IMU可有不同零点；只把目标相对位姿的转角交给原IMU转向控制器。
@@ -240,7 +370,9 @@ bool autonomous_program::StartPoint(const route::command& command) {
       command.maximum_rpm <= 0 || command.maximum_rpm > 600 || !std::isfinite(command.turn_rpm) ||
       command.turn_rpm <= 0 || command.turn_rpm > 600 ||
       !std::isfinite(point_settings.position_tolerance_mm) || point_settings.position_tolerance_mm <= 0 ||
-      !std::isfinite(point_settings.pose_stale_ms) || point_settings.pose_stale_ms <= 0) {
+      !std::isfinite(point_settings.pose_stale_ms) || point_settings.pose_stale_ms <= 0 ||
+      !std::isfinite(point_settings.turn_finish_speed_scale) || point_settings.turn_finish_speed_scale <= 0 ||
+      point_settings.max_heading_realignments > 2) {
     FinishRoutine("POINT CONFIG");
     return false;
   }
@@ -250,26 +382,38 @@ bool autonomous_program::StartPoint(const route::command& command) {
     FinishRoutine("POINT CONFIG");
     return false;
   }
-  double delta = distance <= point_settings.position_tolerance_mm
-                     ? 0
-                     : std::fmod(std::atan2(dy, dx) * 180 / 3.14159265358979323846 -
-                                     std::fmod(position.heading_deg, 360.0),
-                                 360.0);
-  if (delta <= -180)
-    delta += 360;
-  if (delta > 180)
-    delta -= 360;
+  const double delta = distance <= point_settings.position_tolerance_mm ? 0 : PointBearingError(command);
   point_stage = point_phase::facing;
   auto settings = turn_settings;
-  // 分配半径的一半给横向误差，另一半给沿程误差，保留原更严格的限制。
-  if (distance > point_settings.position_tolerance_mm)
-    settings.angle_tolerance_deg = std::min(
-        settings.angle_tolerance_deg,
-        std::atan2(point_settings.position_tolerance_mm / 2, distance) * 180 / 3.14159265358979323846);
+  settings.angle_tolerance_deg = PointTurnTolerance(distance);
+  // 严格角度窗口不变；补角下限小幅上调，仍随容差缩放且不超过普通转向配置。
   settings.minimum_finish_rpm *=
-      std::min(1.0, settings.angle_tolerance_deg / turn_settings.angle_tolerance_deg);
+      std::min(1.0, point_settings.turn_finish_speed_scale * settings.angle_tolerance_deg /
+                        turn_settings.angle_tolerance_deg);
   Turning.Configure(settings);
   Turning.Observe(frame, true, route_time);
   info.motion = autonomous_motion::turn;
   return Turning.StartTurnRelative(delta, command.turn_rpm);
+}
+
+// 位姿朝向与IMU零点可能不同，只返回相对转角，保持原坐标转换约定。
+double autonomous_program::PointBearingError(const route::command& command) const {
+  double delta = std::fmod(
+      std::atan2(command.y_mm - position.y_mm, command.x_mm - position.x_mm) * 180 / 3.14159265358979323846 -
+          std::fmod(position.heading_deg, 360.0),
+      360.0);
+  if (delta <= -180)
+    delta += 360;
+  if (delta > 180)
+    delta -= 360;
+  return delta;
+}
+
+double autonomous_program::PointTurnTolerance(double distance_mm) const {
+  // 半径一半分给横向误差、一半给沿程误差，不放宽原角度窗口。
+  return distance_mm <= point_settings.position_tolerance_mm
+             ? turn_settings.angle_tolerance_deg
+             : std::min(turn_settings.angle_tolerance_deg,
+                        std::atan2(point_settings.position_tolerance_mm / 2, distance_mm) * 180 /
+                            3.14159265358979323846);
 }

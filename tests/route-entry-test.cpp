@@ -4,7 +4,13 @@
 #include <cstdio>
 #include <cstring>
 
-// 直接链接src/route.cpp，验证实际下载的动作表及三段高速控制器衔接。
+#ifndef BARTMOSS_CURRENT_ROUTE
+// 固定基线与用户正在编辑的实车路线分离，保留原全部三段衔接断言。
+void autonomous_program::RunRoutine() {
+  using namespace route;
+  RunRoute({DriveStraight(1500, route::DEFAULT_DRIVE_RPM, 100000), Turn(90, route::DEFAULT_TURN_RPM, 100000),
+            DriveStraight(1500, route::DEFAULT_DRIVE_RPM, 100000)});
+}
 double FullRoute(double response, double drag, bool stress_case = false, bool fast = true) {
   drive::straight_config s;
   s.motion.wheel_diameter_mm = 69.85;
@@ -83,14 +89,14 @@ double FullRoute(double response, double drag, bool stress_case = false, bool fa
     assert(end.finished && end.result == route_result::error && std::strcmp(end.status, "TIMEOUT") == 0);
     assert(end.left_mV == 0 && end.right_mV == 0);
     std::printf(
-        "Actual route stress model: response %.2f drag %.0f stopped on TIMEOUT at step %u, no follow-on "
+        "Baseline route stress model: response %.2f drag %.0f stopped on TIMEOUT at step %u, no follow-on "
         "movement.\n",
         response, drag, end.step);
     return 0;
   }
   if (end.result != route_result::done)
-    std::printf("Actual route failed: response %.2f drag %.0f step %u status %s\n", response, drag, end.step,
-                end.status);
+    std::printf("Baseline route failed: response %.2f drag %.0f step %u status %s\n", response, drag,
+                end.step, end.status);
   assert(end.finished && end.result == route_result::done && end.step == 3 && seen[0] && seen[1] && seen[2]);
   if (fast && config::AUTO_SETTLE_MS == 0)
     assert(immediate_handoffs == 2);
@@ -103,7 +109,7 @@ double FullRoute(double response, double drag, bool stress_case = false, bool fa
   }
   assert(p.Info().run == 1 && p.Info().step == 3 && p.Info().left_mV == 0 && p.Info().right_mV == 0);
   std::printf(
-      "Actual 1500/90/1500 route: %s response %.2f drag %.0f DONE %.0fms, endpoint model (%.0f,%.0f)mm, "
+      "Baseline 1500/90/1500 route: %s response %.2f drag %.0f DONE %.0fms, endpoint model (%.0f,%.0f)mm, "
       "heading %.2fdeg.\n",
       fast ? "fast-handoff" : "route1", response, drag, end.time_ms, x, y, f.heading_deg);
   return end.time_ms;
@@ -146,3 +152,42 @@ int main() {
   FullRoute(.15, 600, true);  // 超出既有直行摩擦模型覆盖时，仍需验证超时撤输出。
   std::puts("Route entry checks passed: actual route builds, explicit enable required and disable stops.");
 }
+
+#else
+// 另一个编译实例直接链接src/route.cpp，检查当前路线的使能、启动与禁用。
+int main() {
+  drive::straight_config s;
+  s.motion.wheel_diameter_mm = 69.85;
+  s.motion.motor_revs_per_wheel_rev = 1.2;
+  s.left_forward.kS = 400;
+  s.left_forward.kV = 16;
+  s.left_forward.calibrated = true;
+  s.right_forward = s.left_reverse = s.right_reverse = s.left_forward;
+  drive::turn_config t;
+  t.left_forward = t.right_forward = t.left_reverse = t.right_reverse = s.left_forward;
+  drive::corner_config c;
+  c.wheel_diameter_mm = 69.85;
+  c.motor_revs_per_wheel_rev = 1.2;
+  c.track_width_mm = 325;
+  c.left_forward = c.left_reverse = c.right_forward = c.right_reverse = s.left_forward;
+  autonomous_program p;
+  p.Configure(config::AutoStraightControl(s), config::AutoTurnControl(t), config::RouteCornerControl(c));
+  p.ConfigurePoint(config::PointControl());
+  drive::straight_feedback f;
+  f.position.valid = f.velocity.valid = f.motors_online = f.stopped = f.inertial_ready = true;
+  drive::pose position;
+  position.valid = true;
+  p.ObservePose(position);
+  p.Update(false, f, 0);
+  assert(p.Info().run == 0 && !p.Info().active);
+  f.velocity.time_ms = 20;
+  ++f.velocity.sequence;
+  position.time_ms = 20;
+  p.ObservePose(position);
+  p.Update(true, f, 20);
+  assert(p.Info().run == 1 && p.Info().result != route_result::error);
+  p.Update(false, f, 40);
+  assert(!p.Info().active && p.Info().left_mV == 0 && p.Info().right_mV == 0);
+  std::puts("Current route: linked user action table, valid pose startup and disable stop passed.");
+}
+#endif

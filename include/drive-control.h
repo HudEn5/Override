@@ -7,6 +7,8 @@ enum class motion_state { idle, running, done, cancelled, error };
 struct point_config {
   double position_tolerance_mm = 5;
   double pose_stale_ms = 200;
+  unsigned max_heading_realignments = 2;  // 转后中心位移时，直行前最多重新对准两次；0用于旧行为对照。
+  double turn_finish_speed_scale = 1.5;   // 放大点位补角下限；仍按角度窗口缩放，兼顾远点精度。
 };
 
 // 默认静默；长按只切换一次，启动或重连时按住按钮也不会自动开始回传。

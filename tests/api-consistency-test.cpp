@@ -2,7 +2,7 @@
 #include <cassert>
 #include <cstdio>
 
-static route::command requested = route::DriveStraight(500, 100);
+static route::command requested = route::DriveStraight(500, 100, 100000);
 void autonomous_program::RunRoutine() {
   RunRoute({requested});
 }
@@ -48,11 +48,11 @@ int main() {
   v.Observe(speed, 0);
   assert(v.Fresh(0));
   assert(!v.Fresh(101));
-  const auto swing = route::Swing(-90, drive::pivot_side::right, 200);
+  const auto swing = route::Swing(-90, drive::pivot_side::right, 200, 100000);
   assert(swing.fixed_side == drive::pivot_side::right && swing.angle_deg == -90 && swing.maximum_rpm == 200);
-  const auto push = route::PushFor(1000, 4);
+  const auto push = route::PushFor(1000, 4, 100000);
   assert(push.duration_ms == 1000 && push.volts == 4);
-  requested = route::MoveToPoint(0, 1500, 100, 100);
+  requested = route::MoveToPoint(0, 1500, 100, 100, 100000);
   drive::turn_config t;
   t.left_forward = t.left_reverse = t.right_forward = t.right_reverse = Settings().left_forward;
   autonomous_program point;

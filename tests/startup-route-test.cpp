@@ -6,7 +6,7 @@
 
 void autonomous_program::RunRoutine() {
   using namespace route;
-  RunRoute({DriveStraight(60, 100), Wait(120), Turn(90, 100)});
+  RunRoute({DriveStraight(60, 100, 100000), Wait(120, 100000), Turn(90, 100, 100000)});
 }
 struct fixture {
   runtime::startup_mode Selection;

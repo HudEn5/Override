@@ -14,6 +14,14 @@ void PrintHeading(unsigned int sequence, const drive::heading_info& h) {
   printf("DHD,%u,%.1f,%.2f,%.2f,%.2f,%.1f,%d,%d,%d\n", sequence, h.time_ms, h.angle_deg, h.target_deg,
          h.error_deg, h.correction_mV, h.locked, h.ready, h.active);
 }
+// 独立协议：余量是当前直线段，末两列为已完成/计划转向次数；不复用DCR整程余量。
+void PrintRolling(unsigned int sequence, const drive::rolling_info& r) {
+  printf("DRL,%u,%.1f,%.1f,%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%u,%u\n", sequence,
+         r.time_ms, r.elapsed_ms, r.phase, static_cast<int>(r.state), r.distance_mm, r.segment_remaining_mm,
+         r.angle_deg, r.reference_deg, r.error_deg, r.rate_deg_s, r.center_rpm, r.left_target_rpm,
+         r.right_target_rpm, r.left_mV, r.right_mV, r.completed_turns, r.total_turns);
+  PrintVelocity(sequence, r.velocity);
+}
 void PrintMotion(unsigned int sequence, const test_info& test) {
   if (!test.visible)
     return;
@@ -72,8 +80,10 @@ void DriveTelemetry() {
                  p.duration_ms, p.left_mV, p.right_mV, static_cast<int>(p.state), p.settling, p.left_rpm,
                  p.right_rpm);
         }
-        motion.visible =
-            moving_route && a.motion != autonomous_motion::none && a.motion != autonomous_motion::push;
+        if (moving_route && a.motion == autonomous_motion::rolling)
+          PrintRolling(value.sequence, a.rolling);
+        motion.visible = moving_route && a.motion != autonomous_motion::none &&
+                         a.motion != autonomous_motion::push && a.motion != autonomous_motion::rolling;
         motion.selected = a.motion == autonomous_motion::corner ? test_motion::corner
                           : a.motion == autonomous_motion::turn ? test_motion::turn
                                                                 : test_motion::straight;

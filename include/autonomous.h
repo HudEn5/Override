@@ -4,6 +4,7 @@
 #include "performance-config.h"
 #include "drive-turn.h"
 #include "drive-corner.h"
+#include "drive-rolling.h"
 #include <initializer_list>
 #include <cstring>
 
@@ -167,63 +168,78 @@ namespace route {
 constexpr double DEFAULT_DRIVE_RPM = config::ROUTE_DRIVE_RPM;
 constexpr double DEFAULT_TURN_RPM = config::ROUTE_TURN_RPM;
 constexpr double DEFAULT_PUSH_VOLTS = 4.0;
-enum class action { straight, turn, heading, corner, wait, push, point, swing };
+enum class action { straight, turn, heading, corner, wait, push, point, swing, drive_turn_drive };
+enum class turn_mode { stop, rolling };
 struct command {
-  explicit command(action value) : kind(value) {}
+  explicit command(action value, double timeout) : kind(value), timeout_ms(timeout) {}
   action kind;
+  double timeout_ms;  // 整个命令的执行上限，毫秒；路线必须显式填写。
   double distance_mm = 0, angle_deg = 0, before_mm = 0, after_mm = 0;
   double x_mm = 0, y_mm = 0, duration_ms = 0, volts = DEFAULT_PUSH_VOLTS;
   double maximum_rpm = DEFAULT_DRIVE_RPM, turn_rpm = DEFAULT_TURN_RPM;
+  double entry_speed_mm_s = 200;
+  turn_mode transition = turn_mode::stop;
   drive::pivot_side fixed_side = drive::pivot_side::none;
 };
-inline command DriveStraight(double distance_mm, double maximum_rpm = DEFAULT_DRIVE_RPM) {
-  command result(action::straight);
+inline command DriveStraight(double distance_mm, double maximum_rpm, double timeout_ms) {
+  command result(action::straight, timeout_ms);
   result.distance_mm = distance_mm;
   result.maximum_rpm = maximum_rpm;
   return result;
 }
-inline command Turn(double angle_deg, double maximum_rpm = DEFAULT_TURN_RPM) {
-  command result(action::turn);
+inline command Turn(double angle_deg, double maximum_rpm, double timeout_ms) {
+  command result(action::turn, timeout_ms);
   result.angle_deg = angle_deg;
   result.maximum_rpm = maximum_rpm;
   return result;
 }
-inline command TurnToHeading(double heading_deg, double maximum_rpm = DEFAULT_TURN_RPM) {
-  command result = Turn(heading_deg, maximum_rpm);
+inline command TurnToHeading(double heading_deg, double maximum_rpm, double timeout_ms) {
+  command result = Turn(heading_deg, maximum_rpm, timeout_ms);
   result.kind = action::heading;
   return result;
 }
-inline command DriveCorner(double before_mm, double angle_deg, double after_mm,
-                           double maximum_rpm = DEFAULT_DRIVE_RPM) {
-  command result(action::corner);
+inline command DriveCorner(double before_mm, double angle_deg, double after_mm, double maximum_rpm,
+                           double timeout_ms) {
+  command result(action::corner, timeout_ms);
   result.before_mm = before_mm;
   result.angle_deg = angle_deg;
   result.after_mm = after_mm;
   result.maximum_rpm = maximum_rpm;
   return result;
 }
-inline command MoveToPoint(double x_mm, double y_mm, double maximum_rpm = DEFAULT_DRIVE_RPM,
-                           double turn_rpm = DEFAULT_TURN_RPM) {
-  command result(action::point);
+inline command MoveToPoint(double x_mm, double y_mm, double maximum_rpm, double turn_rpm, double timeout_ms) {
+  command result(action::point, timeout_ms);
   result.x_mm = x_mm;
   result.y_mm = y_mm;
   result.maximum_rpm = maximum_rpm;
   result.turn_rpm = turn_rpm;
   return result;
 }
-inline command Swing(double angle_deg, drive::pivot_side fixed, double maximum_rpm = DEFAULT_TURN_RPM) {
-  command result = Turn(angle_deg, maximum_rpm);
+inline command Swing(double angle_deg, drive::pivot_side fixed, double maximum_rpm, double timeout_ms) {
+  command result = Turn(angle_deg, maximum_rpm, timeout_ms);
   result.kind = action::swing;
   result.fixed_side = fixed;
   return result;
 }
-inline command Wait(double milliseconds) {
-  command result(action::wait);
+inline command Wait(double milliseconds, double timeout_ms) {
+  command result(action::wait, timeout_ms);
   result.duration_ms = milliseconds;
   return result;
 }
-inline command PushFor(double milliseconds, double volts = DEFAULT_PUSH_VOLTS) {
-  command result(action::push);
+// stop分三步停稳交接；相邻rolling组合自动连成一条路线，仅最后停车。
+inline command DriveTurnDrive(double before_mm, double angle_deg, double after_mm, turn_mode mode,
+                              double entry_mm_s, double maximum_rpm, double timeout_ms) {
+  command result(action::drive_turn_drive, timeout_ms);
+  result.before_mm = before_mm;
+  result.angle_deg = angle_deg;
+  result.after_mm = after_mm;
+  result.transition = mode;
+  result.entry_speed_mm_s = entry_mm_s;
+  result.maximum_rpm = maximum_rpm;
+  return result;
+}
+inline command PushFor(double milliseconds, double volts, double timeout_ms) {
+  command result(action::push, timeout_ms);
   result.duration_ms = milliseconds;
   result.volts = volts;
   return result;
@@ -233,7 +249,8 @@ inline command PushFor(double milliseconds, double volts = DEFAULT_PUSH_VOLTS) {
 enum class route_result { idle, running, done, cancelled, error };
 enum class point_phase { idle, facing, driving };
 
-enum class autonomous_motion { none, straight, turn, corner, push };
+// 既有遥测编号保持；rolling=5独立于旧圆角corner=3。
+enum class autonomous_motion { none, straight, turn, corner, push, rolling };
 
 struct autonomous_info {
   bool active = false;
@@ -247,6 +264,7 @@ struct autonomous_info {
   drive::straight_info drive;
   drive::turn_info turn;
   drive::corner_info corner;
+  drive::rolling_info rolling;
   drive::push_info push;
   autonomous_motion motion = autonomous_motion::none;
   int left_mV = 0, right_mV = 0;
@@ -265,6 +283,7 @@ class autonomous_program {
     Configure(value, turn);
   }
   void Configure(const drive::straight_config& value, const drive::turn_config& turn) {
+    Rolling.Configure(value, turn, drive::corner_config());
     Chassis.Configure(value);
     Turning.Configure(turn);
     straight_settings = value;
@@ -275,6 +294,7 @@ class autonomous_program {
                  const drive::corner_config& corner) {
     Configure(value, turn);
     Cornering.Configure(corner);
+    Rolling.Configure(value, turn, corner);
   }
   void Update(bool permitted, const drive::straight_feedback& feedback, double now);
   void ConfigurePoint(const drive::point_config& value) {
@@ -327,6 +347,26 @@ class autonomous_program {
     Cornering.CancelCorner();
     Publish();
   }
+  bool StartRollingPath(const drive::rolling_leg* legs, unsigned count) {
+    if (!info.active || Busy())
+      return false;
+    info.motion = autonomous_motion::rolling;
+    return Rolling.StartPath(legs, count);
+  }
+  bool StartRollingDriveTurnDrive(double before_mm, double angle_deg, double after_mm, double maximum_rpm,
+                                  double entry_mm_s, double timeout_ms) {
+    if (!info.active || Busy())
+      return false;
+    info.motion = autonomous_motion::rolling;
+    return Rolling.StartDriveTurnDrive(before_mm, angle_deg, after_mm, maximum_rpm, entry_mm_s, timeout_ms);
+  }
+  drive::rolling_state RollingState() const {
+    return Rolling.Info().state;
+  }
+  void CancelRolling() {
+    Rolling.Cancel();
+    Publish();
+  }
   bool StartPushFor(double milliseconds, double volts = route::DEFAULT_PUSH_VOLTS) {
     if (!info.active || Busy())
       return false;
@@ -358,10 +398,7 @@ class autonomous_program {
     FinishRoutine("DONE", route_result::done);
   }
   void FinishRoutine(const char* status, route_result result = route_result::error) {
-    Chassis.CancelDriveStraight();
-    Turning.CancelTurn();
-    Cornering.CancelCorner();
-    Pushing.Cancel();
+    CancelAll();
     point_stage = point_phase::idle;
     info.active = false;
     info.finished = true;
@@ -374,13 +411,22 @@ class autonomous_program {
     return Chassis.Info().state == drive::straight_state::running ||
            Turning.Info().state == drive::turn_state::running ||
            Cornering.Info().state == drive::corner_state::running ||
+           Rolling.Info().state == drive::corner_state::running ||
            Pushing.Info().state == drive::push_state::running;
   }
+  // 动作调度、终态读取和输出发布均使用info.motion这一个选择源。
+  drive::motion_state ActiveState() const;
+  const char* ActiveStatus() const;
+  bool OwnershipValid() const;
+  void CancelAll();  // 仅全局结束/取消使用；普通动作取消不影响其他控制器。
   bool StartPoint(const route::command& command);
   bool PointPoseReady() const;
+  double PointBearingError(const route::command& command) const;
+  double PointTurnTolerance(double distance_mm) const;
   void Publish();
   drive::pose position;
   point_phase point_stage = point_phase::idle;
+  unsigned point_realignments = 0;
   drive::point_config point_settings;
   drive::straight_config straight_settings;
   drive::turn_config turn_settings;
@@ -388,10 +434,12 @@ class autonomous_program {
   drive::straight_controller Chassis;
   drive::turn_controller Turning;
   drive::corner_controller Cornering;
+  drive::rolling_controller Rolling;
   drive::push_controller Pushing;
   autonomous_info info;
   bool previously_permitted = false;
   bool waiting_ready = false;
   bool route_step_started = false;
-  double route_time = 0, wait_started = 0;
+  unsigned transfer_phase = 0, rolling_span = 1;
+  double route_time = 0, wait_started = 0, action_started_at = 0;
 };

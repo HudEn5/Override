@@ -17,6 +17,8 @@ export const TURN_PROFILE_HEADER = 'sequence,turn_time_ms,elapsed_ms,reference_d
 export const POSE_HEADER = 'sequence,pose_time_ms,x_mm,y_mm,heading_deg,valid,needs_reset';
 export const CORNER_HEADER = 'sequence,corner_time_ms,elapsed_ms,phase,state,distance_mm,remaining_mm,angle_deg,reference_deg,error_deg,rate_deg_s,center_rpm,left_target_rpm,right_target_rpm,left_command_mV,right_command_mV';
 
+export const ROLLING_HEADER = 'sequence,rolling_time_ms,elapsed_ms,phase,state,distance_mm,segment_remaining_mm,angle_deg,reference_deg,error_deg,rate_deg_s,center_rpm,left_target_rpm,right_target_rpm,left_command_mV,right_command_mV,completed_turns,total_turns';
+
 // 字段数正确仍可能是串口错位。检查整数、标志和枚举，不将明显破损的数值写入 CSV。
 function validFields(kind, f) {
   const integer = (i, min = 0, max = Number.MAX_SAFE_INTEGER) =>
@@ -30,7 +32,7 @@ function validFields(kind, f) {
         integer(22) && flags(23, 24) && [12, 13, 25, 26].every(voltage) &&
         (kind === 'DSV' || integer(27, 0, 8));
     case 'DLM': return integer(6, 0, 3);
-    case 'DRA': return integer(2) && integer(3) && integer(4, 0, 4) && flags(5, 6, 7) &&
+    case 'DRA': return integer(2) && integer(3) && integer(4, 0, 5) && flags(5, 6, 7) &&
       integer(8, 0, 4) && !(f[5] === '1' && f[6] === '1') && (f[7] === '0' || f[5] === '1');
     case 'DPS': return Number(f[2]) >= 0 && Number(f[3]) >= 0 && Number(f[3]) <= 5000 &&
       integer(4, 0, 12000) && integer(5, 0, 12000) && integer(6, 0, 4) && flags(7) &&
@@ -42,6 +44,9 @@ function validFields(kind, f) {
     case 'DTN': return Number(f[2]) >= 0 && voltage(8) && voltage(9) && integer(10, 0, 4);
     case 'DTA': return Number(f[2]) >= 0 && Number(f[5]) >= 0 && Number(f[6]) >= 0 && integer(7, 0, 4);
     case 'DPO': return flags(5,6) && !(f[5]==='1' && f[6]==='1');
+    case 'DRL': return Number(f[2]) >= 0 && integer(3, 0, 4) && integer(4, 0, 4) && voltage(14) && voltage(15) &&
+      integer(16, 0, 16) && integer(17, 0, 16) && Number(f[16]) <= Number(f[17]) &&
+      (!['1','2'].includes(f[4]) || Number(f[17]) > 0);
     case 'DCR': return Number(f[2]) >= 0 && integer(3, 0, 4) && integer(4, 0, 4) && voltage(14) && voltage(15);
     case 'DHS': return integer(2, 1) && integer(3, 1, 4) && ['-1', '1'].includes(f[4]) &&
       integer(5, 0, 4) && [6, 9, 10, 11, 12, 13].every(i => Number(f[i]) >= 0) && flags(14) &&
@@ -62,12 +67,13 @@ export class DriveLines {
   qualities = 0;
   turns = 0;
   corners = 0;
+  rolling = 0;
   tuning = 0;
   routes = 0;
   pushes = 0;
   turnProfiles = 0;
   poses = 0;
-  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}, onProfile = () => {}, onQuality = () => {}, onTurn = () => {}, onCorner = () => {}, onTuning = () => {}, onRoute = () => {}, onPush = () => {}, onTurnProfile = () => {}, onPose = () => {}) {
+  constructor(onSample, onDiagnostic = () => {}, onHeading = () => {}, onVelocity = () => {}, onProfile = () => {}, onQuality = () => {}, onTurn = () => {}, onCorner = () => {}, onTuning = () => {}, onRoute = () => {}, onPush = () => {}, onTurnProfile = () => {}, onPose = () => {}, onRolling = () => {}) {
     this.onSample = onSample; this.onDiagnostic = onDiagnostic; this.onHeading = onHeading;
     this.onVelocity = onVelocity;
     this.onProfile = onProfile;
@@ -78,6 +84,7 @@ export class DriveLines {
     this.onPush = onPush;
     this.onTurnProfile = onTurnProfile;
     this.onPose = onPose;
+    this.onRolling = onRolling;
   }
   push(text) {
     this.pending += text;
@@ -94,13 +101,19 @@ export class DriveLines {
       const quality = record.startsWith('DSQ,');
       const turn = record.startsWith('DTN,');
       const corner = record.startsWith('DCR,');
+      const rolling = record.startsWith('DRL,');
       const tuning = record.startsWith('DHS,');
       const route = record.startsWith('DRA,');
       const push = record.startsWith('DPS,');
       const turnProfile = record.startsWith('DTA,');
       const pose = record.startsWith('DPO,');
-      if (!legacy && !diagnostic && !heading && !velocity && !profile && !quality && !turn && !corner && !tuning && !route && !push && !turnProfile && !pose && !record.startsWith('DS2,')) { this.other++; continue; }
+      if (!legacy && !diagnostic && !heading && !velocity && !profile && !quality && !turn && !corner && !rolling && !tuning && !route && !push && !turnProfile && !pose && !record.startsWith('DS2,')) { this.other++; continue; }
       const fields = record.slice(4).split(',');
+      if (rolling) {
+        if (fields.length !== 18 || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields('DRL', fields)) this.malformed++;
+        else { this.rolling++; this.onRolling(fields); }
+        continue;
+      }
       if (pose) {
         if (fields.length !== 7 || fields.some(x => !x.trim() || !Number.isFinite(Number(x))) || !validFields('DPO', fields)) this.malformed++;
         else { this.poses++; this.onPose(fields); }
@@ -172,7 +185,7 @@ export async function capture(seconds) {
   const stem = path.join(directory, `drive-websocket-${Date.now()}`);
   // wx 防止覆盖已有的实测数据。原始日志保留不完整行，便于定位传输问题。
   const csv = fs.openSync(`${stem}.csv`, 'wx');
-  let raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses;
+  let raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses, rolling;
   try {
     raw = fs.openSync(`${stem}.log`, 'wx');
     motors = fs.openSync(`${stem}-motors.csv`, 'wx');
@@ -189,6 +202,8 @@ export async function capture(seconds) {
     fs.writeSync(turns, `${TURN_HEADER}\n`);
     corners = fs.openSync(`${stem}-corner.csv`, 'wx');
     fs.writeSync(corners, `${CORNER_HEADER}\n`);
+    rolling = fs.openSync(`${stem}-rolling.csv`, 'wx');
+    fs.writeSync(rolling, `${ROLLING_HEADER}\n`);
     tuning = fs.openSync(`${stem}-tuning.csv`, 'wx');
     fs.writeSync(tuning, `${TUNING_HEADER}\n`);
     routes = fs.openSync(`${stem}-route.csv`, 'wx');
@@ -200,11 +215,11 @@ export async function capture(seconds) {
     poses = fs.openSync(`${stem}-pose.csv`, 'wx');
     fs.writeSync(poses, `${POSE_HEADER}\n`);
   } catch (error) {
-    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses]) if (fd !== undefined) fs.closeSync(fd);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses, rolling]) if (fd !== undefined) fs.closeSync(fd);
     throw error;
   }
   let samples = 0, bytes = 0, latest, latestQuality, latestTuning, latestVelocity, latestCorner, latestRoute, connected = false;
-  let latestPose, latestProfile, latestTurn, latestPush, latestKind = '', latestMotionSequence = -1;
+  let latestRolling, latestPose, latestProfile, latestTurn, latestPush, latestKind = '', latestMotionSequence = -1;
   const parser = new DriveLines(fields => {
     fs.writeSync(csv, `${fields.join(',')}\n`);
     samples++; latest = fields;
@@ -219,7 +234,8 @@ export async function capture(seconds) {
   fields => { fs.writeSync(routes, `${fields.join(',')}\n`); latestRoute = fields; },
   fields => { fs.writeSync(pushes, `${fields.join(',')}\n`); latestPush = fields; latestKind = 'push'; latestMotionSequence = Number(fields[0]); },
   fields => fs.writeSync(turnProfiles, `${fields.join(',')}\n`),
-  fields => { fs.writeSync(poses, `${fields.join(',')}\n`); latestPose = fields; });
+  fields => { fs.writeSync(poses, `${fields.join(',')}\n`); latestPose = fields; },
+  fields => { fs.writeSync(rolling, `${fields.join(',')}\n`); latestRolling = fields; latestKind = 'rolling'; latestMotionSequence = Number(fields[0]); });
   fs.writeSync(csv, `${HEADER}\n`);
   console.log(`只读采集 ${seconds}s，设备 ${device.platform} ${device.device}，VS Code ID=${device.instanceId}`);
   console.log(`CSV: ${stem}.csv`);
@@ -232,6 +248,7 @@ export async function capture(seconds) {
   console.log(`角速度规划参考、阶段及跟踪误差: ${stem}-turn-profile.csv`);
   console.log(`编码器与IMU位姿推算: ${stem}-pose.csv`);
   console.log(`连续圆角阶段、距离、航向和两侧目标: ${stem}-corner.csv`);
+  console.log(`移动转向阶段、当前段余量和转向计数: ${stem}-rolling.csv`);
   console.log(`高速整定指标与终态: ${stem}-tuning.csv`);
   console.log(`自动路线步骤、等待与结果: ${stem}-route.csv`);
   console.log(`定时前推电压、计时和停稳: ${stem}-push.csv`);
@@ -255,12 +272,17 @@ export async function capture(seconds) {
       const status = setInterval(() => {
         if (latestRoute && Number(latestRoute[0]) >= latestMotionSequence) {
           const a = latestRoute;
-          console.log(`ROUTE run=${a[2]} step=${a[3]} ${a[7] === '1' ? 'WAIT' : ['READY','RUN','DONE','CANCEL','FAULT'][a[8]]}；路线=${parser.routes}，圆角=${parser.corners}，规划=${parser.profiles}，转向=${parser.turns}，坏行=${parser.malformed}，接收=${bytes} 字节`);
+          console.log(`ROUTE run=${a[2]} step=${a[3]} ${a[7] === '1' ? 'WAIT' : ['READY','RUN','DONE','CANCEL','FAULT'][a[8]]}；路线=${parser.routes}，圆角=${parser.corners}，移动转向=${parser.rolling}，规划=${parser.profiles}，转向=${parser.turns}，坏行=${parser.malformed}，接收=${bytes} 字节`);
+          return;
+        }
+        if (latestKind === 'rolling' && latestRolling) {
+          const r = latestRolling;
+          console.log(`ROLL ${['READY','RUN','DONE','CANCEL','FAULT'][r[4]]} 阶段=${r[3]} 转向=${r[16]}/${r[17]}；角度=${r[7]}° 误差=${r[9]}° 当前段剩余=${r[6]} mm`);
           return;
         }
         if (latestKind === 'corner' && latestCorner) {
           const c = latestCorner;
-          console.log(`CNR ${['READY','RUN','DONE','CANCEL','FAULT'][c[4]]} 阶段=${c[3]}；角度=${c[7]}° 参考=${c[8]}° 误差=${c[9]}°，剩余=${c[6]} mm；圆角=${parser.corners}，坏行=${parser.malformed}，接收=${bytes} 字节`);
+          console.log(`CNR ${['READY','RUN','DONE','CANCEL','FAULT'][c[4]]} 阶段=${c[3]}；角度=${c[7]}° 参考=${c[8]}° 误差=${c[9]}°，剩余=${c[6]} mm；圆角=${parser.corners}，移动转向=${parser.rolling}，坏行=${parser.malformed}，接收=${bytes} 字节`);
           return;
         }
         if (latestKind === 'tuning' && latestTuning) {
@@ -315,13 +337,13 @@ export async function capture(seconds) {
       ws.onclose = () => finish(new Error('设备数据通道提前关闭；检查 VS Code 设备选择和连接'));
     });
   } finally {
-    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses]) fs.closeSync(fd);
-    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，质量=${parser.qualities}，转向=${parser.turns}，圆角=${parser.corners}，高速汇总=${parser.tuning}，路线=${parser.routes}，位姿=${parser.poses}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
+    for (const fd of [csv, raw, motors, headings, velocities, profiles, quality, turns, corners, tuning, routes, pushes, turnProfiles, poses, rolling]) fs.closeSync(fd);
+    console.log(`采集结束：连接=${connected}，字节=${bytes}，有效样本=${samples}，电机诊断=${parser.diagnostics}，航向=${parser.headings}，速度闭环=${parser.velocities}，规划=${parser.profiles}，质量=${parser.qualities}，转向=${parser.turns}，圆角=${parser.corners}，移动转向=${parser.rolling}，高速汇总=${parser.tuning}，路线=${parser.routes}，位姿=${parser.poses}，坏行=${parser.malformed}，其他行=${parser.other}，末尾未完成字符=${parser.pending.length}`);
   }
-  if (!samples && !parser.poses && !parser.pushes && !parser.routes && !parser.tuning && !parser.corners && !parser.turns && !parser.profiles) throw new Error(bytes ? '收到输出，但没有完整运动数据；请确认运行的是包含底盘采样的 Bartmoss' : '没有收到样本；请确认 Bartmoss 运行中、LOG:ON 和无线连接正常');
+  if (!samples && !parser.poses && !parser.pushes && !parser.routes && !parser.tuning && !parser.corners && !parser.rolling && !parser.turns && !parser.profiles) throw new Error(bytes ? '收到输出，但没有完整运动数据；请确认运行的是包含底盘采样的 Bartmoss' : '没有收到样本；请确认 Bartmoss 运行中、LOG:ON 和无线连接正常');
   if (!samples && latestVelocity) console.log('精简回传：速度由 velocity.csv 的目标减误差获得；基础速度和电机诊断 CSV 仅有表头。');
   else if (!parser.diagnostics) console.log('未收到 LM/LF 角度、电流记录；仅有速度数据，不能完成电机交叉诊断。');
-  return { samples, bytes, diagnostics: parser.diagnostics, tuning: parser.tuning, corners: parser.corners, turns: parser.turns, turnProfiles: parser.turnProfiles, profiles: parser.profiles, routes: parser.routes, pushes: parser.pushes, poses: parser.poses };
+  return { samples, bytes, diagnostics: parser.diagnostics, tuning: parser.tuning, corners: parser.corners, rolling: parser.rolling, turns: parser.turns, turnProfiles: parser.turnProfiles, profiles: parser.profiles, routes: parser.routes, pushes: parser.pushes, poses: parser.poses };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

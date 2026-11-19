@@ -34,8 +34,11 @@ run api-consistency src/autonomous.cpp tests/api-consistency-test.cpp
 run point-swing src/autonomous.cpp tests/point-swing-test.cpp
 run autonomous-turn src/autonomous.cpp tests/autonomous-turn-test.cpp
 run autonomous-corner src/autonomous.cpp tests/autonomous-corner-test.cpp
-run route-entry src/autonomous.cpp src/route.cpp tests/route-entry-test.cpp
+run rolling-route src/autonomous.cpp tests/rolling-route-test.cpp
+run route-entry src/autonomous.cpp tests/route-entry-test.cpp
+run current-route -DBARTMOSS_CURRENT_ROUTE=1 src/autonomous.cpp src/route.cpp tests/route-entry-test.cpp
 run route-sequence src/autonomous.cpp tests/route-sequence-test.cpp
+run route-timeout src/autonomous.cpp tests/route-timeout-test.cpp
 run timed-push tests/drive-push-test.cpp
 run autonomous-push src/autonomous.cpp tests/autonomous-push-test.cpp
 run startup-mode tests/startup-mode-test.cpp
@@ -48,3 +51,16 @@ run calibration-concurrency -pthread -DBARTMOSS_CALIBRATION=1 -I tests/sampling-
 run high-speed tests/high-speed-test.cpp
 run performance tests/performance-test.cpp
 run high-speed-concurrency -pthread -DBARTMOSS_HIGH_SPEED=1 -I tests/sampling-mocks src/runtime-info.cpp tests/runtime-info-test.cpp
+
+# 旧最大参数个数必须报缺少timeout，禁止默默给出默认超时。
+for kind in {0..8}; do
+  if "$compiler" -std=c++11 -fsyntax-only -I include -DMISSING_ROUTE_TIMEOUT="$kind" tests/route-timeout-test.cpp > build/host-tests/missing-timeout.log 2>&1; then
+    printf 'Missing timeout unexpectedly compiled: %s\n' "$kind"
+    exit 1
+  fi
+  if ! grep -q 'too few arguments' build/host-tests/missing-timeout.log; then
+    cat build/host-tests/missing-timeout.log
+    exit 1
+  fi
+done
+printf 'All nine route factories reject missing timeout at compile time.\n'

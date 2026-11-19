@@ -9,6 +9,7 @@ inline drive::point_config PointControl() {
   drive::point_config result;
   result.position_tolerance_mm = 5;
   result.pose_stale_ms = 200;
+  result.turn_finish_speed_scale = 1.5;  // 设1恢复原点位补角下限，普通Turn不受影响。
   return result;
 }
 
@@ -48,6 +49,10 @@ namespace config {
 constexpr bool EXPERIMENTAL_FAST_ROUTE = true;
 // 用户要求轮端450rpm；电机输出轴经30:36外部减速，代码需540rpm。
 constexpr double ROUTE_DRIVE_RPM = EXPERIMENTAL_FAST_ROUTE ? 540 : 330;
+// 直行斜率单位为电机rpm/s；原400/400，当前放缓到240/240以减小动态跟踪差异。
+// 最高速度仍为540电机rpm；短距离会因加减速距离不足而达不到该上限。
+constexpr double ROUTE_STRAIGHT_ACCELERATION = 240;
+constexpr double ROUTE_STRAIGHT_DECELERATION = 240;
 // 原地转向同样使用540电机rpm上限；角速度规划会按角度缩短加速段。
 constexpr double ROUTE_TURN_RPM = EXPERIMENTAL_FAST_ROUTE ? 540 : 140;
 constexpr bool TURN_ANGULAR_PROFILE = true;  // false单独恢复原540rpm上限的角度PD方案。
@@ -58,7 +63,8 @@ constexpr double AUTO_SETTLE_MS = EXPERIMENTAL_FAST_ROUTE ? 0 : 250;
 inline drive::straight_config RouteStraightControl(const drive::straight_config& baseline) {
   auto result = HighSpeedStraightControl(baseline);
   if (EXPERIMENTAL_FAST_ROUTE) {
-    result.motion.acceleration_rpm_s = result.motion.deceleration_rpm_s = 400;
+    result.motion.acceleration_rpm_s = ROUTE_STRAIGHT_ACCELERATION;
+    result.motion.deceleration_rpm_s = ROUTE_STRAIGHT_DECELERATION;
     result.motion.minimum_settle_rpm = 18;
     // 高速轨迹结束时可能仍有位置落后，避免用原20rpm上限长时间爬行补足。
     result.motion.position_kP = .6;
@@ -99,6 +105,18 @@ inline drive::turn_config AutoTurnControl(const drive::turn_config& baseline) {
   auto result = RouteTurnControl(baseline);
   result.settle_ms = AUTO_SETTLE_MS;
   return result;
+}
+// 单侧Swing独立整定：加强追赶与角速度阻尼，不提高末端最低轮速。
+constexpr double SWING_POSITION_FEEDBACK_SCALE = 4.0;
+constexpr double SWING_RATE_DAMPING = 1.4;
+inline drive::turn_config SwingControl(const drive::turn_config& baseline) {
+  auto result = baseline;
+  if (EXPERIMENTAL_FAST_ROUTE && result.profile_enabled) {
+    result.kP *= SWING_POSITION_FEEDBACK_SCALE;
+    result.profile_finish_kP *= SWING_POSITION_FEEDBACK_SCALE;
+    result.kD = SWING_RATE_DAMPING;
+  }
+  return result;  // 普通Turn不经过此函数；加减速/制动预留/补角下限/精度沿用原值。
 }
 inline drive::corner_config RouteCornerControl(const drive::corner_config& baseline) {
   auto result = HighSpeedCornerControl(baseline);

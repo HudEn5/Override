@@ -6,11 +6,14 @@ int scenario = 0;
 void autonomous_program::RunRoutine() {
   using namespace route;
   if (scenario == 2)
-    RunRoute({PushFor(std::numeric_limits<double>::quiet_NaN()), DriveStraight(0)});
+    RunRoute({PushFor(std::numeric_limits<double>::quiet_NaN(), route::DEFAULT_PUSH_VOLTS, 100000),
+              DriveStraight(0, route::DEFAULT_DRIVE_RPM, 100000)});
   else if (scenario == 3)
-    RunRoute({PushFor(0), Wait(0), DriveStraight(0)});
+    RunRoute({PushFor(0, route::DEFAULT_PUSH_VOLTS, 100000), Wait(0, 100000),
+              DriveStraight(0, route::DEFAULT_DRIVE_RPM, 100000)});
   else
-    RunRoute({PushFor(1000), Wait(100), DriveStraight(0)});
+    RunRoute({PushFor(1000, route::DEFAULT_PUSH_VOLTS, 100000), Wait(100, 100000),
+              DriveStraight(0, route::DEFAULT_DRIVE_RPM, 100000)});
   if (info.active && info.motion == autonomous_motion::push && PushState() == drive::push_state::running) {
     assert(!StartDriveStraight(50, 100) && !StartTurnRelative(90, 100));
     assert(!StartPushFor(500));
