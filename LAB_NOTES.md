@@ -284,3 +284,32 @@ Point/Swing、API一致性、路线超时、混合序列、当前7号启动/禁�
 远端origin/main仍92eba1f，是当前开发提交的祖先，允许快进发布；准备在当前feat/odometry提交并将同一快照推送main/开发分支及v2.1.0-beta.1标签，不切换或强推分支。个人.vscode/c_cpp_properties.json仅换行改动原样保留、不纳入提交；构建产物、参考工程、实测原始数据、本机SDK/配置与备份均不提交。没有自动下载或启动机器人。
 
 最终发布前补充：beta1-remaining-host分批余项及九种漏参编译失败检查全部通过；仍保留完整批次rolling-route失败，未声称同批38项通过。发布代码与VERSION/PROGRAM_VERSION均2.1.0-beta.1，下载描述未变；已完成提交前差异和忽略文件检查。
+
+## 2026-11-20：直行走歪且自动/测试无响应，检查设备在线
+
+用户要求重点核查左侧在线。源码相对已发布版本无运动配置改动，左侧仍LF12/LM1/LBD11/LBU13，反转true/false/true/false。只读WebSocket采集drive-websocket-1795149066135连接成功但90秒0字节，不能从该文件推断任何电机在线状态；当前高速回传本来就省略DS2在线掩码。未下载或启动机器人、未更改参数。
+
+改从VS Code VEX Device Info读取，并点击Refresh System Info；插件日志12:34:18系统状态查询成功。刷新后智能设备列表有电机端口1、2、3、5、6、9、10、11、13、15，惯导4、Radio8，缺少配置的LF12。因此本次识别到左侧3台/右侧4台，左前LF未被识别；其余底盘与手臂/夹爪端口均在列表。保存可访问性设备列表build/data/motor-online-20261120.txt。设备识别不代表已验证输出方向、实际扭矩或连接稳定性，也不能凭列表区分线缆、电机或主控端口故障。
+
+main自动入口要求frame.motors_online且position.valid、IMU就绪、速度有效并停车；缺LF足以阻止自动启动。测试也依赖整侧有效速度，掉线后可能在MOVING门槛即被阻止，未必能显示MOTOR OFF；控制器本身另有MOTOR OFF检查。用户描述与缺机一致，直行偏移关联属推测，待恢复识别后验证。建议先停止程序，重插LF两端智能线，再用已知正常线及备用端口交叉检查；恢复原12口并重启程序建立有效位姿后复测，不以调PID掩盖掉线。尚未收到用户修复结果。
+
+## 2026-11-20：完整性与统一性只读审查
+
+用户要求再次检查整份代码，保留其LF16/6:1/true修改；未改运动代码、路线、下载描述或调参。核查include/src调度、硬件入口、前馈/速度环、里程推算、三包mutex共享、比赛切换与遥测协议。Default/Test/Competition/Calibration/HighSpeed五种SDK强制重编译均通过，Default最后生成，日志review-20261120-模式；38个宿主机入口及9种缺timeout拒绝编译均在同一批通过（review-20261120-host.log），Node协议/Git同步10项通过（review-20261120-node.log）。历史间歇断言本轮未复现，不宣称根因已解决。没有自动下载、运行或推送。
+
+发现待修问题：1.测试入口先检查frame.stopped，而stopped依赖velocity.valid；电机离线令速度无效，静止车仍显示MOVING并挡在控制器MOTOR OFF之前；高速又省略DS2掩码，诊断不一致。2.main的auto_ready只核查原始反馈，不包含位姿needs_reset，短暂丢反馈后位姿锁存失效但电机恢复可使菜单显示就绪，当前MoveToPoint路线随后POSE ERROR，提示应区分定位有效性与普通距离动作可用性，不自动清失效坐标。3.EXPERIMENTAL_FAST_ROUTE=false声称恢复core-v2.0.0全部控制参数，但基础TurnControl加速度当前360/历史240rpm/s，开关无法恢复该值。注意旧core自动本来也调用HighSpeedStraight/Corner，不能把仍调用这两个包装器本身误报为问题；审查中对此作了纠正。4.README第50/71/85行仍有旧版本/旧默认路线/LF12，高速指南保留point1、400/400和旧路线，实际为beta1、240/240、路线7与LF16；交付文档需要同步。未将历史档案中的旧参数误作现用错误。
+
+已确认：九种route工厂显式timeout；取消/异常/超时输出归零；原Turn与rolling分离，调度归属检查存在；主线程独占控制器与电机输出，共享队列/运行快照/场控通知用mutex。剩余风格债主要是早期数学函数少量camelCase与状态别名引用不统一，未为格式做大范围改写。模型通过不是物理端点验收，LF16实车在线、点位重复性与新场地偏移未由本轮离线检查证明。
+
+## 2026-11-20：readiness1修复审查四项问题
+
+用户授权修复。新增drive::StartStatus，日常Test和H档先检查在线/惯导/位置/速度反馈，再判断MOVING，静止掉线不再冒充运动；失败保持零输出，恢复后需重新松开再按A。新增AutomaticStartStatus用于本地A自动入口：除反馈/停车外检查位姿valid、needs_reset、有限数值与200ms新鲜度；失效锁存显示POSE RESET:RESTART，需回已知起点再重启，未自动清坐标。此为本地整条自动路线的统一就绪要求；X直行/原地等分项不依赖全局位姿，场控许可仍绕过本地菜单，执行层Point保护保持。auto_status为静态字符串指针，沿现有runtime_info mutex快照发布，显示具体失败原因，没有新线程/头文件/协议或打印频率变化。
+
+RouteTurnControl关闭实验档时显式恢复历史240rpm/s；基础TurnControl的360与当前实验档640等参数保持。增加可选experimental参数以直接验证两条分支，现有调用仍默认同一常量，不改变路线API。README/高速/启动/路线/结构说明同步LF16、beta1、路线7及240/240；保留历史档案、用户LF16修改与个人编辑器配置，不修改下载description。
+
+测试覆盖静止且多项无效反馈的诊断优先级、反馈恢复但A未松开不自动重启、重新按A可运行、位姿丢失阻止本地A但X仍可选、位姿过期/NaN/时钟边界、回退240/当前高速640。完整38项宿主机与9种缺timeout拒绝编译同批通过（fix-readiness-20261120-host.log）；Test/Competition/Calibration/HighSpeed/Default五种SDK均通过（fix-readiness-20261120-模式.log），Default最后生成build/Bartmoss.bin。性能模型结果与审查基线一致：短500mm峰173.8电机rpm/2480ms；高档配对平均5303ms，表明本次未改变当前运动参数。历史间歇断言本次未复现，根因仍未解决。差异检查通过，未下载/启动/推送，实车提示与LF16在线待用户确认。
+
+
+## 2026-11-20：并行机构开发前发布beta.2基线
+
+用户要求先将现有程序上传，再开始机构接口/并行路线/模拟验证。将已通过readiness1完整回归的当前版本标为2.1.0-beta.2，包含LF16、就绪诊断与文档修复；下载description保留。仅准备上传该基线，不将后续机构开发混入同一次发布。个人编辑器配置不提交。

@@ -67,6 +67,13 @@ result Sim(bool experimental, int direction, double la, double ra, double drag, 
   return out;
 }
 int main() {
+  drive::turn_config turn;
+  turn.acceleration_rpm_s = 360;
+  const auto legacy_turn = config::RouteTurnControl(turn, false);
+  assert(legacy_turn.acceleration_rpm_s == 240 && !legacy_turn.profile_enabled);
+  assert(legacy_turn.kP == turn.kP && legacy_turn.kD == turn.kD);
+  const auto fast_turn = config::RouteTurnControl(turn, true);
+  assert(fast_turn.acceleration_rpm_s == 640 && fast_turn.profile_enabled == config::TURN_ANGULAR_PROFILE);
   unsigned int count = 0;
   double before_time = 0, after_time = 0, max_error = 0, max_heading = 0;
   for (int direction : {-1, 1})

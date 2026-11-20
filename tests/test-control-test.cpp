@@ -85,6 +85,26 @@ struct fixture {
   }
 };
 int main() {
+  for (int fault = 1; fault <= 4; ++fault) {
+    fixture f;
+    f.frame.stopped = false;  // 与实车一致：无效测速不能被判定为停车。
+    f.frame.motors_online = fault != 1;
+    f.frame.inertial_ready = fault != 2;
+    f.frame.position.valid = fault != 3;
+    f.frame.velocity.valid = fault != 4;
+    f.input.test_start = true;
+    f.Test.Update(f.input, f.output, true, f.now, f.frame);
+    const char* expected[] = {"", "MOTOR OFF", "IMU WAIT", "POSITION ERR", "SPEED ERR"};
+    assert(!std::strcmp(f.Test.Info().status, expected[fault]));
+    assert(!f.Test.Info().running && f.output.left_mV == 0 && f.output.right_mV == 0);
+    f.Step();  // 反馈恢复，仍按住A不能突然起步。
+    assert(!f.Test.Info().running);
+    f.input.test_start = false;
+    f.Step();
+    f.input.test_start = true;
+    f.Step();
+    assert(f.Test.Info().running);
+  }
   // 当前路线预设开机只选中圆角，不自动运动；两处衔接均保持前进输出。
   for (int direction : {-1, 1}) {
     fixture route(true, true);

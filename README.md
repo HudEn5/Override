@@ -2,7 +2,7 @@
 
 2026–2027赛季VEX V5机器人控制程序，面向八电机差速底盘、双电机机械臂、夹爪和气动机构，支持手动驾驶、自动路线、分项测试与遥测。
 
-**当前版本：`2.1.0-beta.1`（预发布）。** 本版用于继续调路线与实车验收，上一发布基线为 `2.0.6-route3`（[92eba1f](https://github.com/HudEn5/Override/commit/92eba1f0ec2c7923323be5330e8f5db8ef05f707)），历史标签 `core-v2.0.0`保留。
+**当前版本：`2.1.0-beta.2`（预发布）。** 本版用于继续调路线与实车验收，上一发布基线为 `2.0.6-route3`（[92eba1f](https://github.com/HudEn5/Override/commit/92eba1f0ec2c7923323be5330e8f5db8ef05f707)），历史标签 `core-v2.0.0`保留。
 
 本版提供编码器＋IMU位姿推算、MoveToPoint、单侧Swing、相邻多弯不停顿衔接。所有路线动作必须显式填写末尾 `timeout_ms`；超时停车并终止路线，组合内部阶段共用预算，多弯逐条计时。接口和单位见[路线指南](docs/ROUTE_GUIDE.md)。
 
@@ -47,7 +47,7 @@ cd Override
 脚本支持 `-SdkPath`、`-ToolchainPath` 指定安装位置；多电脑配置见 [设备与同步说明](DEVICE_SYNC.md)。
 
 默认输出为 `build/Bartmoss.bin`，程序名 **Bartmoss**，下载槽位 **1**。
-通过VEX扩展下载后核对版本（当前实验`2.0.6-route3`，发布基线`2.0.0`），保持静止等待惯导校准完成，再从A/B/X菜单选择模式。
+通过VEX扩展下载后核对版本（当前`2.1.0-beta.2`），保持静止等待惯导校准完成，再从A/B/X菜单选择模式。
 
 ### 运行一次底盘测试
 
@@ -68,7 +68,7 @@ cd Override
 ```
 
 输出`build/highspeed/Bartmoss.bin`，不会覆盖默认下载文件`build/Bartmoss.bin`。
-菜单A执行 `src/route.cpp` 的整条路线：前进1500 mm → 到位停稳 → 原地逆时针90° → 到角停稳 → 再前进1500 mm。各动作完成后立即衔接，无额外等待。
+菜单A执行 `src/route.cpp` 中选中的路线。当前 `TEST_ROUTE=7`：`MoveToPoint(300,300,400,300,10000)`，先转向目标点，再直行；其他测试路线通过编号选择，参数见路线指南。
 路线编排、Wait、无场控测试和比赛接入见 [路线指南](docs/ROUTE_GUIDE.md)。
 在 `include/test-config.h` 将 `HIGH_SPEED_CORNER_TEST` 设为 false，X测试切换为 H1～H4 直行整定：
 200/265/330/330 rpm 四档、1.5～1.8 米行程；H3 保留基线，H4 在同速同加减速下增强位置纠偏，用于对照验证。
@@ -82,7 +82,7 @@ cd Override
 
 | 设备 | 主控端口 | 电机内部减速比 | 软件反转 |
 | --- | --- | --- | --- |
-| LF / LM / LBD / LBU | 12 / 1 / 11 / 13 | 6:1 | true / false / true / false |
+| LF / LM / LBD / LBU | 16 / 1 / 11 / 13 | 6:1 | true / false / true / false |
 | RF / RM / RBD / RBU | 6 / 5 / 9 / 10 | 6:1 | false / true / false / true |
 | ArmL / ArmR | 3 / 2 | 36:1 | false / true |
 | Claw | 15 | 18:1 | true |

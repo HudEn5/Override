@@ -17,7 +17,7 @@ namespace config {
 #if BARTMOSS_HIGH_SPEED != 0 && BARTMOSS_HIGH_SPEED != 1
 #error Invalid high-speed environment
 #endif
-const char PROGRAM_VERSION[] = "2.1.0-beta.1";  // 当前预发布版本，与VERSION保持一致。
+const char PROGRAM_VERSION[] = "2.1.0-beta.2";  // 当前预发布版本，与VERSION保持一致。
 const char CONTROLLER_VERSION[] = "VLT";         // 遥控器标明纯电压版本。
 // 默认高速菜单；低速测试、比赛和标定可通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION
@@ -44,7 +44,7 @@ struct Motor {
 };
 
 // 底盘端口、齿轮比和反转方向按本赛季提供的设备配置填写。
-const Motor LF = {12, vex::ratio6_1, true};
+const Motor LF = {16, vex::ratio6_1, true};
 const Motor LM = {1, vex::ratio6_1, false};
 const Motor LBD = {11, vex::ratio6_1, true};
 const Motor LBU = {13, vex::ratio6_1, false};

@@ -72,9 +72,10 @@ inline drive::straight_config RouteStraightControl(const drive::straight_config&
   }
   return result;
 }
-inline drive::turn_config RouteTurnControl(const drive::turn_config& baseline) {
+inline drive::turn_config RouteTurnControl(const drive::turn_config& baseline,
+                                           bool experimental = EXPERIMENTAL_FAST_ROUTE) {
   auto result = baseline;
-  if (EXPERIMENTAL_FAST_ROUTE) {
+  if (experimental) {
     result.kP = 2.0;
     result.kD = .25;
     result.acceleration_rpm_s = 640;
@@ -93,7 +94,8 @@ inline drive::turn_config RouteTurnControl(const drive::turn_config& baseline) {
       result.minimum_settle_rpm = TURN_FAST_FINISH ? 60 : 30;
       result.minimum_finish_rpm = TURN_FAST_FINISH ? 30 : 24;
     }
-  }
+  } else
+    result.acceleration_rpm_s = 240;  // core-v2.0.0原地转向斜率，不继承后续基础配置的360。
   return result;
 }
 inline drive::straight_config AutoStraightControl(const drive::straight_config& baseline) {

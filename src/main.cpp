@@ -111,15 +111,15 @@ int main() {
     frame.stopped = frame.velocity.valid && std::fabs(frame.velocity.left_rpm) < 5 &&
                     std::fabs(frame.velocity.right_rpm) < 5;
 #endif
-    // 所有模式持续推算，直接用位置增量，不积分已滤波的转速；位姿暂不参与动作控制。
+    // 所有模式持续推算；MoveToPoint与本地自动就绪读取此位姿，不积分已滤波转速。
     Odometry.Update(frame.position.left_deg, frame.position.right_deg, heading, now,
                     configured && frame.motors_online && frame.position.valid && frame.inertial_ready);
 #if !BARTMOSS_CALIBRATION
     const bool initialization_ready = inertial != hardware::InertialState::calibrating;
     const bool sticks = std::abs(input.y_axis) > config::JOYSTICK_DEADBAND ||
                         std::abs(input.angular_axis) > config::JOYSTICK_DEADBAND;
-    const bool auto_ready =
-        frame.stopped && frame.motors_online && frame.inertial_ready && frame.position.valid;
+    const char* auto_status = runtime::AutomaticStartStatus(frame, Odometry.Info(), now);
+    const bool auto_ready = auto_status == nullptr;
 #endif
 #if BARTMOSS_CALIBRATION
     const auto access = runtime::Permissions(
@@ -134,9 +134,10 @@ int main() {
 #endif
     const bool telemetry = Telemetry.Update(input.telemetry, access.telemetry);
     drive::SetTelemetryEnabled(telemetry);
-    manual::output output = DriverControl.Update(
-        input, access.manual, config::JOYSTICK_DEADBAND, config::MANUAL_DRIVE_MAX_VOLTAGE, config::ARM_UP_VOLTAGE,
-        config::ARM_DOWN_VOLTAGE, config::CLAW_VOLTAGE * config::CLAW_CLOSE_DIRECTION);
+    manual::output output =
+        DriverControl.Update(input, access.manual, config::JOYSTICK_DEADBAND,
+                             config::MANUAL_DRIVE_MAX_VOLTAGE, config::ARM_UP_VOLTAGE,
+                             config::ARM_DOWN_VOLTAGE, config::CLAW_VOLTAGE * config::CLAW_CLOSE_DIRECTION);
     drive::BeginCommandUpdate();
     bool test_owns_drive = false;
     int mode = 0;
@@ -177,6 +178,7 @@ int main() {
     info.local_mode = Selection.Mode();
     info.controls_armed = Selection.Armed();
     info.auto_ready = auto_ready;
+    info.auto_status = auto_status;
     info.initializing = !initialization_ready;
     info.returning_to_manual = Selection.ReturningToManual();
     info.return_remaining_ms = Selection.ReturnRemainingMs();

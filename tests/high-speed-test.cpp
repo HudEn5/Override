@@ -85,6 +85,14 @@ struct fixture {
   }
 };
 int main() {
+  fixture offline;
+  offline.frame.motors_online = offline.frame.velocity.valid = offline.frame.stopped = false;
+  offline.input.test_start = true;
+  offline.Test.Update(offline.input, offline.output, true, offline.now, offline.frame);
+  assert(!std::strcmp(offline.Test.Info().status, "MOTOR OFF"));
+  assert(!offline.Test.Info().running && offline.output.left_mV == 0 && offline.output.right_mV == 0);
+  offline.Step();
+  assert(!offline.Test.Info().running);
   for (unsigned int stage = 0; stage < 4; ++stage)
     for (int direction : {-1, 1}) {
       fixture f;

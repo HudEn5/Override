@@ -1,6 +1,6 @@
 # 高速测试与性能参数
 
-当前开发版2.1.0-point1，参数以performance-config.h为准；历史阶段说明见[整定历史](history/TUNING_LEGACY.md)，原地转向细节与数据见[转向整定](TURN_TUNING.md)。
+当前预发布版2.1.0-beta.2，参数以performance-config.h为准；历史阶段说明见[整定历史](history/TUNING_LEGACY.md)，原地转向细节与数据见[转向整定](TURN_TUNING.md)。
 
 ## 参数入口与单位
 
@@ -15,7 +15,7 @@ API与遥测的rpm为电机减速箱输出轴转速，30:36外部减速使540电
 | 当前参数 | 数值 |
 | --- | --- |
 | 直行/原地/圆角单侧目标上限 | 540电机rpm |
-| 自动直行加速/减速 | 400/400 rpm/s |
+| 自动直行加速/减速 | 240/240 rpm/s |
 | 直行位置P/最大纠偏/最低补位 | 0.6 rpm/mm / 60rpm / 18rpm |
 | 原地角加速/角减速 | 1200/1000度/秒² |
 | 转向预留/角速度滤波 | 100/20ms |
@@ -29,7 +29,7 @@ EXPERIMENTAL_FAST_ROUTE=false恢复2.0预设；TURN_ANGULAR_PROFILE=false切回�
 
 ## 日常测试
 
-启动校准完成后菜单X进入测试，上/下选STR/TURN/CNR，左/右选方向，A启动、B取消、Y切换LOG。STR为1500mm，TURN为90°，CNR为500/90°/500；菜单A执行src/route.cpp，当前为1500→原地90°→1500，二者不要混淆。MoveToPoint/Swing示例和参数见[路线指南](ROUTE_GUIDE.md)。
+启动校准完成后菜单X进入测试，上/下选STR/TURN/CNR，左/右选方向，A启动、B取消、Y切换LOG。STR为1500mm，TURN为90°，CNR为500/90°/500；菜单A执行src/route.cpp，当前选路线7：MoveToPoint(300,300,400,300,10000)，二者不要混淆。MoveToPoint/Swing示例和参数见[路线指南](ROUTE_GUIDE.md)。
 
 ## H1～H4整定
 
@@ -43,4 +43,4 @@ qualified表示正常结束且实际中心速度达到目标90%、参考速度�
 
 H档统计包括距离、余距、峰值轮速、航向峰值、速度误差RMS、高电压累计时间、连续达速时间与qualified；11.5V指令阈值不等于实测饱和。采样低频可能漏过瞬时峰值，不能用目标/电压零值代替实际零速。
 
-当前34个宿主机程序和五种SDK构建已通过；turn3、MoveToPoint与Swing待实车。前馈在100～200rpm采集区间外仍属外推，不保证跨场地、温升和负载一致。保留的低速Test与独立Calibration用于回归与重新标定，不因目录整理移除。
+2026-11-20审查时38个宿主机程序、九种漏填timeout拒绝编译检查及五种SDK构建通过。Swing新参数两侧各单轮DONE，MoveToPoint直行前重新对准仍待实车，历史间歇断言根因尚未定位。前馈在100～200rpm采集区间外仍属外推，不保证跨场地、温升和负载一致。保留的低速Test与独立Calibration用于回归与重新标定，不因目录整理移除。

@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cstdio>
 #include <limits>
+#include <cstring>
 
 struct fixture {
   runtime::startup_mode Selection;
@@ -33,6 +34,36 @@ struct fixture {
   }
 };
 int main() {
+  // 模拟掉线后的定位锁存：反馈恢复也不能显示自动就绪；X仍可选择。
+  drive::straight_feedback frame;
+  frame.motors_online = frame.inertial_ready = frame.position.valid = frame.velocity.valid = frame.stopped =
+      true;
+  drive::pose pose;
+  pose.valid = true;
+  assert(runtime::AutomaticStartStatus(frame, pose, 0) == nullptr);
+  frame.motors_online = frame.velocity.valid = frame.stopped = false;
+  assert(!std::strcmp(runtime::AutomaticStartStatus(frame, pose, 20), "MOTOR OFF"));
+  frame.motors_online = frame.velocity.valid = frame.stopped = true;
+  pose.valid = false;
+  pose.needs_reset = true;
+  const char* status = runtime::AutomaticStartStatus(frame, pose, 40);
+  assert(!std::strcmp(status, "POSE RESET:RESTART"));
+  fixture locked;
+  locked.ready = status == nullptr;
+  locked.Choose(1);
+  assert(locked.Selection.Mode() == runtime::local_mode::select);
+  locked.Release();
+  locked.Choose(4);
+  locked.Release();
+  assert(locked.access.tests && !locked.access.autonomous);
+  pose.needs_reset = false;
+  assert(!std::strcmp(runtime::AutomaticStartStatus(frame, pose, 40), "POSE WAIT"));
+  pose.valid = true;
+  assert(runtime::AutomaticStartStatus(frame, pose, 200) == nullptr);
+  assert(!std::strcmp(runtime::AutomaticStartStatus(frame, pose, 201), "POSE WAIT"));
+  assert(!std::strcmp(runtime::AutomaticStartStatus(frame, pose, -1), "POSE WAIT"));
+  pose.x_mm = std::numeric_limits<double>::quiet_NaN();
+  assert(!std::strcmp(runtime::AutomaticStartStatus(frame, pose, 40), "POSE WAIT"));
   using runtime::local_mode;
   for (int mask = 1; mask < 8; ++mask) {
     fixture held;

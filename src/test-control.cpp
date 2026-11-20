@@ -80,8 +80,8 @@ bool test_control::Update(const manual::input& input, manual::output& output, bo
     const bool selecting =
         input.test_next || input.test_previous || input.test_positive || input.test_negative;
     if (start && !selecting) {
-      if (!frame.stopped)
-        info.status = "MOVING";
+      if (const char* status = drive::StartStatus(frame))
+        info.status = status;
       else {
         ResetMotion();
         const bool started = info.selected == test_motion::straight

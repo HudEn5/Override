@@ -25,6 +25,21 @@ struct straight_feedback {
   double heading_deg = 0;
 };
 
+// 起步前先区分反馈故障和实际运动，避免掉线导致测速无效却显示MOVING。
+inline const char* StartStatus(const straight_feedback& frame) {
+  if (!frame.motors_online)
+    return "MOTOR OFF";
+  if (!frame.inertial_ready || !std::isfinite(frame.heading_deg))
+    return "IMU WAIT";
+  if (!frame.position.valid || !std::isfinite(frame.position.left_deg) ||
+      !std::isfinite(frame.position.right_deg))
+    return "POSITION ERR";
+  if (!frame.velocity.valid || !std::isfinite(frame.velocity.left_rpm) ||
+      !std::isfinite(frame.velocity.right_rpm))
+    return "SPEED ERR";
+  return frame.stopped ? nullptr : "MOVING";
+}
+
 struct straight_info {
   straight_state state = straight_state::idle;
   const char* status = "READY";

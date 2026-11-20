@@ -2,7 +2,10 @@
 
 ## 当前状态
 
-- 当前预发布版本2.1.0-beta.1，开发分支feat/odometry；用户已授权将当前程序上传GitHub并由助手定版本。旧main基线92eba1f（2.0.6-route3），core-v2.0.0为历史标签；发布时只允许快进，不强推，保留当前开发分支及用户编辑器改动。
+- LF已由用户从12移到16号口，ratio6_1/true不变；不得恢复成12。其余左侧1/11/13与右侧6/5/9/10保持。
+- readiness1：测试/H档先检查MOTOR OFF/IMU WAIT/POSITION ERR/SPEED ERR再判断MOVING；本地A自动额外检查位姿valid/needs_reset/200ms新鲜度。POSE RESET:RESTART要求回已知起点再重启，不自动清坐标；X独立测试和场控许可不受本地位姿门控影响。auto_status沿原mutex快照发布。RouteTurnControl关闭实验档恢复240rpm/s，当前高速配置不变。
+
+- 当前预发布版本2.1.0-beta.2，开发分支feat/odometry；用户已授权将当前程序上传GitHub并由助手定版本。旧main基线92eba1f（2.0.6-route3），core-v2.0.0为历史标签；发布时只允许快进，不强推，保留当前开发分支及用户编辑器改动。
 - 当前TEST_ROUTE=7，MoveToPoint(300,300,400,300,10000)修正候选待实车；原点位8.28mm推算终点超差记录保留。Swing新参数两侧各一轮DONE，均1273ms，停后误差约0.51/0.30度，重复性待验；多弯也有单轮DONE。
 - 手控独立6V上限，自动540电机rpm上限，21个头文件/11个实现文件。所有route动作显式timeout，A/B/X和场控权限不变；不要自动下载或启动机器人。
 - 宿主机38项入口及模型已分阶段检查，曾有间歇断言，单项复查通过但根因未定位。预发布不代表完整实车验收。日志入口LAB_NOTES.md，历史阶段参数勿当现用配置。

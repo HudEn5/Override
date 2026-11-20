@@ -85,8 +85,8 @@ class high_speed_control {
       const bool selecting =
           input.test_next || input.test_previous || input.test_positive || input.test_negative;
       if (start && !selecting) {
-        if (!frame.stopped)
-          info.status = "MOVING";
+        if (const char* status = drive::StartStatus(frame))
+          info.status = status;
         else if (!ValidStage())
           info.status = "HS CONFIG";
         else {

@@ -86,7 +86,7 @@ void ControllerInfoDisplay() {
           snprintf(lines[0], sizeof(lines[0]), "A:AUTO B:MANUAL");
           snprintf(lines[1], sizeof(lines[1]), "X:TEST LOG:%s", info.telemetry ? "ON" : "OFF");
           snprintf(lines[2], sizeof(lines[2]), "%s",
-                   info.auto_ready ? "Release keys/choose" : "AUTO: WAIT READY");
+                   info.auto_ready ? "Release keys/choose" : info.auto_status);
         } else if (!info.controls_armed) {
           snprintf(lines[0], sizeof(lines[0]), "%s SELECTED",
                    info.local_mode == runtime::local_mode::automatic ? "AUTO"
@@ -99,7 +99,7 @@ void ControllerInfoDisplay() {
                    info.automatic.run ? info.automatic.status : "READY");
           snprintf(lines[2], sizeof(lines[2]), "B1s:MENU LOG:%s", info.telemetry ? "ON" : "OFF");
         } else if (info.local_mode == runtime::local_mode::automatic && !info.autonomous_period) {
-          snprintf(lines[0], sizeof(lines[0]), "AUTO WAIT READY");
+          snprintf(lines[0], sizeof(lines[0]), "%s", info.auto_status ? info.auto_status : "AUTO WAIT READY");
           snprintf(lines[2], sizeof(lines[2]), "B:STOP LOG:%s", info.telemetry ? "ON" : "OFF");
         }
       }

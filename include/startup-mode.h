@@ -1,9 +1,23 @@
 #pragma once
 
 #include "driver-control-logic.h"
+#include "drive-straight.h"
 #include <cmath>
 
 namespace runtime {
+// 本地自动菜单要求定位可用；X分项距离/转向仍只依赖自身反馈，不自动清除失效坐标。
+inline const char* AutomaticStartStatus(const drive::straight_feedback& frame, const drive::pose& pose,
+                                        double now) {
+  if (const char* status = drive::StartStatus(frame))
+    return status;
+  if (pose.needs_reset)
+    return "POSE RESET:RESTART";
+  if (!pose.valid || !std::isfinite(pose.x_mm) || !std::isfinite(pose.y_mm) ||
+      !std::isfinite(pose.heading_deg) || !std::isfinite(pose.time_ms) || !std::isfinite(now) ||
+      pose.time_ms < 0 || now < pose.time_ms || now - pose.time_ms > 200)
+    return "POSE WAIT";
+  return nullptr;
+}
 enum class program_mode { test, competition, calibration };
 enum class competition_stage { none, autonomous, driver };
 struct permissions {
