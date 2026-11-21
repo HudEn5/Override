@@ -3,6 +3,7 @@
 #include "driver-control-logic.h"
 #include "vex.h"
 #include "drive-control.h"
+#include "mechanisms.h"
 
 extern vex::brain Brain;
 extern vex::controller Controller;
@@ -25,7 +26,14 @@ extern vex::digital_out* TogglePiston;
 namespace hardware {
 bool Initialize();
 manual::input ReadInput();
-void Apply(const manual::output& output, bool write_drive = true, bool brake_drive = false);
+mechanisms::feedback ReadLiftFeedback();
+bool ClawOnline();
+void Apply(const manual::output& output, bool write_drive = true, bool brake_drive = false,
+           const mechanisms::claw_info* claw_override = nullptr);
+// 一个长期线程独占 ArmL/ArmR；主循环只提交命令与权限，读取小状态快照。
+void PublishLiftRequest(const mechanisms::lift_authority& authority, const mechanisms::lift_request& request);
+mechanisms::lift_info ReadLiftInfo();
+int LiftControlTask();
 void GetDriveMotorCount(int& left_count, int& right_count);
 drive::feedback ReadDriveFeedback();
 bool ReadDrivePosition(double& left_deg, double& right_deg);

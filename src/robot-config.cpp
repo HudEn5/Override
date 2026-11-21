@@ -23,10 +23,13 @@ namespace {
 // 统一遍历具名设备；通过指针地址表写回各设备变量。
 vex::motor** const LeftDrive[4] = {&LF, &LM, &LBD, &LBU};
 vex::motor** const RightDrive[4] = {&RF, &RM, &RBD, &RBU};
-bool arm_moving = false;
+bool left_arm_moving = false, right_arm_moving = false;
 vex::inertial* Inertial = nullptr;
 vex::timer InertialTimer;
 bool inertial_calibration_started = false;
+vex::mutex lift_mutex;
+mechanisms::lift_mailbox lift_mailbox;
+mechanisms::lift_info lift_snapshot;
 
 bool RegisterPort(int port, bool required, bool (&used)[22]) {
   if (port == 0 && !required)
@@ -127,6 +130,34 @@ void SetVoltage(vex::motor* motor, int millivolts) {
   else
     motor->spin(vex::fwd, millivolts, vex::voltageUnits::mV);
 }
+void ApplyArmVoltage(vex::motor* motor, int millivolts, bool& moving) {
+  if (millivolts != 0 && motor) {
+    motor->spin(vex::fwd, millivolts * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
+    moving = true;
+  } else if (moving) {
+    if (motor) motor->stop(config::ARM_BRAKE_MODE);
+    moving = false;
+  }
+}
+bool LiftManualAllowed(const mechanisms::lift_authority& authority, double now) {
+  const double age = now - authority.time_ms;
+  if (!std::isfinite(age) || age < 0 || age > mechanisms::LIFT_COMMAND_LEASE_MS ||
+      !authority.manual_allowed || !Controller.installed()) return false;
+  const bool field = Competition.isFieldControl() || Competition.isCompetitionSwitch();
+  if (field != authority.field_connected) return false;
+#if !BARTMOSS_CALIBRATION
+  if (field && (!Competition.isEnabled() || !Competition.isDriverControl() || Competition.isAutonomous())) return false;
+#endif
+  return true;
+}
+bool LiftClosedLoopAllowed(const mechanisms::lift_authority& authority, double now) {
+  const double age = now - authority.time_ms;
+  if (!authority.closed_loop_allowed || !std::isfinite(age) || age < 0 || age > mechanisms::LIFT_COMMAND_LEASE_MS) return false;
+  const bool field = Competition.isFieldControl() || Competition.isCompetitionSwitch();
+  if (field != authority.field_connected) return false;
+  if (!authority.autonomous) return !field && LiftManualAllowed(authority, now);
+  return field ? Competition.isEnabled() && Competition.isAutonomous() && !Competition.isDriverControl() : Controller.installed();
+}
 }  // 匿名命名空间
 
 namespace hardware {
@@ -157,13 +188,7 @@ bool Initialize() {
   }
   ArmL = CreateMotor(config::ArmL, config::ARM_BRAKE_MODE);
   ArmR = CreateMotor(config::ArmR, config::ARM_BRAKE_MODE);
-  // 编码器归零仅用于观察位移，不参与电压控制，也不要求从机械起点启动。
-  if (ArmL) {
-    ArmL->setPosition(0, vex::deg);
-  }
-  if (ArmR) {
-    ArmR->setPosition(0, vex::deg);
-  }
+  // 不修改 SDK 编码器计数；抬升线程用上电第一组有效读数建立一次相对零点。
   Claw = CreateMotor(config::Claw, config::CLAW_BRAKE_MODE);
   TogglePiston = new vex::digital_out(ThreeWirePort(config::TogglePiston));
   TogglePiston->set(config::PISTON_INITIAL_STATE);
@@ -198,7 +223,8 @@ manual::input ReadInput() {
   return input;
 }
 
-void Apply(const manual::output& output, bool write_drive, bool brake_drive) {
+void Apply(const manual::output& output, bool write_drive, bool brake_drive,
+           const mechanisms::claw_info* claw_override) {
   if (write_drive) {
     for (int i = 0; i < 4; ++i) {
       // 测试停车直接刹车，避免先按普通手控停止方式再发一次刹车。
@@ -214,24 +240,122 @@ void Apply(const manual::output& output, bool write_drive, bool brake_drive) {
         SetVoltage(*RightDrive[i], output.right_mV);
     }
   }
-  const bool arm_ready = ArmL && ArmR && ArmL->installed() && ArmR->installed();
-  const int voltage = output.arm_enabled && arm_ready ? output.arm_mV : 0;
-  if (voltage != 0) {
-    // 两台电机同周期接收电压，左右安装方向由各自的反转配置处理。
-    ArmL->spin(vex::fwd, voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
-    ArmR->spin(vex::fwd, voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
-    arm_moving = true;
-  } else if (arm_moving) {
-    // 仅在停止的瞬间记录内置 hold 位置，避免循环改写保持点。
-    if (ArmL)
-      ArmL->stop(config::ARM_BRAKE_MODE);
-    if (ArmR)
-      ArmR->stop(config::ARM_BRAKE_MODE);
-    arm_moving = false;
-  }
-  SetVoltage(Claw, output.claw_mV);
+  // ArmL/ArmR 由 LiftControlTask 独占，包括原 R1/R2 手动电压。
+  const bool claw_running = claw_override && claw_override->result == mechanisms::state::running;
+  const int claw_mV = claw_running ?
+      (ClawOnline() ? claw_override->millivolts * config::CLAW_CLOSE_DIRECTION : 0) : output.claw_mV;
+  SetVoltage(Claw, claw_mV);
   if (TogglePiston)
     TogglePiston->set(output.toggle_piston);
+}
+mechanisms::feedback ReadLiftFeedback() {
+  mechanisms::feedback result;
+  result.arm_online = ArmL && ArmR && ArmL->installed() && ArmR->installed();
+  if (result.arm_online) {
+    result.left_deg = ArmL->position(vex::deg) * config::ARM_UP_DIRECTION;
+    result.right_deg = ArmR->position(vex::deg) * config::ARM_UP_DIRECTION;
+    result.left_deg_s = ArmL->velocity(vex::rpm) * 6 * config::ARM_UP_DIRECTION;
+    result.right_deg_s = ArmR->velocity(vex::rpm) * 6 * config::ARM_UP_DIRECTION;
+    result.arm_valid = std::isfinite(result.left_deg) && std::isfinite(result.right_deg) &&
+        std::isfinite(result.left_deg_s) && std::isfinite(result.right_deg_s);
+  }
+  return result;
+}
+bool ClawOnline() { return Claw && Claw->installed(); }
+
+void PublishLiftRequest(const mechanisms::lift_authority& authority, const mechanisms::lift_request& request) {
+  lift_mutex.lock(); lift_mailbox.publish(authority, request); lift_mutex.unlock();
+}
+mechanisms::lift_info ReadLiftInfo() {
+  lift_mutex.lock();
+  const mechanisms::lift_info result = lift_snapshot;
+  lift_mutex.unlock();
+  return result;
+}
+int LiftControlTask() {
+  // 只构造一次控制器，不拷贝大的 runtime_info；mutex 内无 SDK 电机操作或等待。
+  mechanisms::lift_controller lift;
+  mechanisms::lift_packet packet;
+  bool power_zero_pending = true;
+  bool have_heartbeat = false;
+  while (true) {
+    const double cycle_start = vex::timer::systemHighResolution() / 1000.0;
+    if (lift_mutex.try_lock()) {
+      packet = lift_mailbox.take();
+      lift_mutex.unlock();
+    }
+    // 必须在取包之后读时钟，避免新命令时间比旧 now 更新而被误判过期。
+    const double now = vex::timer::systemHighResolution() / 1000.0;
+    if (packet.reset) lift.cancel();
+    packet.reset = false;
+    const auto command = packet.command;
+    packet.command = mechanisms::lift_request();  // 拿不到锁也不能重放上周期命令。
+    const bool overflow = packet.overflow; packet.overflow = false;
+    if (std::isfinite(packet.authority.time_ms) && packet.authority.time_ms >= 0) have_heartbeat = true;
+    const double age = now - packet.authority.time_ms;
+    const bool fresh = have_heartbeat && std::isfinite(age) && age >= 0 && age <= mechanisms::LIFT_COMMAND_LEASE_MS;
+    const bool manual_allowed = LiftManualAllowed(packet.authority, now);
+    const bool closed_loop_allowed = LiftClosedLoopAllowed(packet.authority, now);
+    const bool up = Pressed(config::ArmUp), down = Pressed(config::ArmDown);
+    const bool manual_held = manual_allowed && (up || down);
+    const auto frame = ReadLiftFeedback();
+    lift.observe(frame, closed_loop_allowed, now);
+    if (power_zero_pending && lift.zero_here(true)) {
+      power_zero_pending = false;
+      lift.notice("POWER ZERO");
+    }
+    if (have_heartbeat && !fresh) lift.fault("MAIN STALE");
+    else if (overflow) lift.fault("COMMAND OVERFLOW");
+    else if (manual_held || command.kind == mechanisms::lift_command_kind::cancel) {
+      lift.cancel(); if (command.kind != mechanisms::lift_command_kind::none) lift.notice("MANUAL/CANCEL");
+    } else if (command.kind != mechanisms::lift_command_kind::none) {
+      const double event_age = now - packet.command_time_ms;
+      const bool sticks = !packet.authority.autonomous &&
+          (std::abs(ReadAxis(config::YAxis)) > config::JOYSTICK_DEADBAND ||
+           std::abs(ReadAxis(config::AngularAxis)) > config::JOYSTICK_DEADBAND);
+      if (!std::isfinite(event_age) || event_age < 0 || event_age > mechanisms::LIFT_COMMAND_LEASE_MS) lift.notice("COMMAND STALE");
+      else if (!closed_loop_allowed) lift.notice("MODE DISABLED");
+      else if (!packet.authority.start_ready) lift.notice(packet.authority.start_blocked);
+      else if (sticks) lift.notice("CENTER STICKS");
+      else if (lift.busy()) lift.notice("BUSY");
+      else {
+        if (command.kind == mechanisms::lift_command_kind::zero) {
+          lift.notice(lift.zero_here() ? "ZEROED" : "WAIT ARM STOP");
+        } else {
+          const bool accepted = command.kind == mechanisms::lift_command_kind::angle ? lift.LiftTo(command.target, command.timeout_ms) :
+              lift.LiftHeightTo(command.target, command.timeout_ms);
+          lift.notice(accepted ? "STARTED" : lift.info().status);
+        }
+      }
+    }
+    // SDK 读取或调度可能耗时：真正写入前重新检查时钟、许可和实时手动键。
+    const double check_time = vex::timer::systemHighResolution() / 1000.0;
+    const bool live_manual = LiftManualAllowed(packet.authority, check_time);
+    const bool live_closed = LiftClosedLoopAllowed(packet.authority, check_time);
+    const bool write_up = Pressed(config::ArmUp), write_down = Pressed(config::ArmDown);
+    const double write_now = vex::timer::systemHighResolution() / 1000.0;
+    const double write_age = write_now - packet.authority.time_ms;
+    const bool work_fresh = std::isfinite(write_now) && write_now >= cycle_start &&
+        write_now - cycle_start <= mechanisms::LIFT_COMMAND_LEASE_MS;
+    const bool write_fresh = have_heartbeat && work_fresh && std::isfinite(write_age) &&
+        write_age >= 0 && write_age <= mechanisms::LIFT_COMMAND_LEASE_MS;
+    if (!work_fresh) lift.fault("CLOCK/STALE");
+    else if (have_heartbeat && (!std::isfinite(write_age) || write_age < 0 || write_age > mechanisms::LIFT_COMMAND_LEASE_MS))
+      lift.fault("MAIN STALE");
+    else if (!live_closed || (live_manual && (write_up || write_down))) lift.cancel();
+    int voltage = 0;
+    if (write_fresh && frame.arm_online) {
+      if (live_manual && (write_up || write_down)) voltage = write_up != write_down ? (write_up ? config::ARM_UP_VOLTAGE : -config::ARM_DOWN_VOLTAGE) : 0;
+      else if (live_closed && lift.busy()) voltage = lift.info().left_mV;
+    }
+    ApplyArmVoltage(ArmL, voltage, left_arm_moving);
+    ApplyArmVoltage(ArmR, voltage, right_arm_moving);
+    if (lift_mutex.try_lock()) { lift_snapshot = lift.info(); lift_mutex.unlock(); }
+    const double work_ms = vex::timer::systemHighResolution() / 1000.0 - cycle_start;
+    // 10ms 为目标周期；实际 dt 显示在主控，不能把目标频率当实测频率。
+    vex::wait(std::max(1.0, mechanisms::LIFT_CONTROL_PERIOD_MS - work_ms), vex::msec);
+  }
+  return 0;
 }
 void GetDriveMotorCount(int& left_count, int& right_count) {
   left_count = 0;

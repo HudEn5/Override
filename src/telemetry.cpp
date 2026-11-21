@@ -63,6 +63,13 @@ void DriveTelemetry() {
       drive::PrintSample(value, dropped);
 #endif
       const runtime_info info = ReadRuntimeInfo();
+      // 沿用现有采样队列的 2/5 Hz 节流，场控关闭回传时不发送机构记录。
+      if (info.telemetry) {
+        const auto& lift = info.lift;
+        printf("DLF,%u,%.1f,%d,%d,%.2f,%.2f,%.2f,%d,%d,%.1f,%s\n", value.sequence, value.time_ms,
+               lift.homed, static_cast<int>(lift.result), lift.left_deg, lift.right_deg, lift.target_deg,
+               lift.left_mV, lift.right_mV, lift.elapsed_ms, lift.status);
+      }
       printf("DPO,%u,%.1f,%.2f,%.2f,%.2f,%d,%d\n", value.sequence, info.pose.time_ms, info.pose.x_mm,
              info.pose.y_mm, info.pose.heading_deg, info.pose.valid, info.pose.needs_reset);
       PrintMotion(value.sequence, info.test);

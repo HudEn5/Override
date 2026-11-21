@@ -40,6 +40,7 @@ void TestLines(const test_info& test, bool log, char (&lines)[3][20]) {
 }
 
 void ControllerInfoDisplay() {
+  bool lift_panel_was_visible = false;
 #if BARTMOSS_HIGH_SPEED
   char previous[3][20] = {};
 #endif
@@ -52,8 +53,11 @@ void ControllerInfoDisplay() {
       snprintf(lines[0], sizeof(lines[0]), "U%+.1f L%.0f R%.0f", info.output.arm_mV / 1000.0, left, right);
       snprintf(lines[1], sizeof(lines[1]), "%s CFG%d ARM%d", Environment(), info.configured,
                info.output.arm_enabled);
-      snprintf(lines[2], sizeof(lines[2]), "LOG:%s Y %u", info.telemetry ? "ON" : "OFF",
-               (info.tick / 20) % 10);
+#if BARTMOSS_CALIBRATION
+      snprintf(lines[2], sizeof(lines[2]), "LOG:%s Y", info.telemetry ? "ON" : "OFF");
+#else
+      snprintf(lines[2], sizeof(lines[2]), "Y:LIFT LOG:%s", info.telemetry ? "ON" : "OFF");
+#endif
       if (info.test.visible)
         TestLines(info.test, info.telemetry, lines);
 #if BARTMOSS_HIGH_SPEED
@@ -86,7 +90,8 @@ void ControllerInfoDisplay() {
           snprintf(lines[0], sizeof(lines[0]), "A:AUTO B:MANUAL");
           snprintf(lines[1], sizeof(lines[1]), "X:TEST LOG:%s", info.telemetry ? "ON" : "OFF");
           snprintf(lines[2], sizeof(lines[2]), "%s",
-                   info.auto_ready ? "Release keys/choose" : "AUTO: WAIT READY");
+                   mechanisms::LIFT_WITH_ROUTE && !info.lift.homed ? "WAIT POWER ZERO"
+                   : info.auto_ready ? "Release keys/choose" : "AUTO: WAIT READY");
         } else if (!info.controls_armed) {
           snprintf(lines[0], sizeof(lines[0]), "%s SELECTED",
                    info.local_mode == runtime::local_mode::automatic ? "AUTO"
@@ -97,7 +102,7 @@ void ControllerInfoDisplay() {
         } else if (info.local_mode == runtime::local_mode::manual) {
           snprintf(lines[1], sizeof(lines[1]), "MANUAL %s",
                    info.automatic.run ? info.automatic.status : "READY");
-          snprintf(lines[2], sizeof(lines[2]), "B1s:MENU LOG:%s", info.telemetry ? "ON" : "OFF");
+          snprintf(lines[2], sizeof(lines[2]), "Y:LIFT B1s:MENU");
         } else if (info.local_mode == runtime::local_mode::automatic && !info.autonomous_period) {
           snprintf(lines[0], sizeof(lines[0]), "AUTO WAIT READY");
           snprintf(lines[2], sizeof(lines[2]), "B:STOP LOG:%s", info.telemetry ? "ON" : "OFF");
@@ -134,6 +139,13 @@ void ControllerInfoDisplay() {
     }
     int l = 0, r = 0;
     hardware::GetDriveMotorCount(l, r);
+    if (lift_panel_was_visible != info.lift_panel_enabled) {
+      Brain.Screen.setFillColor(vex::black);
+      Brain.Screen.setPenColor(vex::black);
+      Brain.Screen.drawRectangle(0, 65, 480, 175);
+      Brain.Screen.setPenColor(vex::white);
+      lift_panel_was_visible = info.lift_panel_enabled;
+    }
     // 第二行留给初始化错误；其余显示只读取快照，不调用运动控制器。
     Brain.Screen.printAt(10, 60, true, "%s CFG=%d PAD=%d RUN=%d LOG=%s          ", Environment(),
                          info.configured, Controller.installed(), info.enabled,
@@ -157,6 +169,32 @@ void ControllerInfoDisplay() {
                          : info.autonomous_period ? info.automatic.status
                          : info.test.visible      ? info.test.status
                                                   : "MANUAL");
+    if (info.lift_auto_blocked || (info.local_selection && info.local_mode == runtime::local_mode::select &&
+                                 mechanisms::LIFT_WITH_ROUTE && !info.lift.homed))
+      Brain.Screen.printAt(10, 235, "AUTO BLOCKED: WAIT POWER ZERO       ");
+    if (info.lift_panel_enabled) {
+      Brain.Screen.printAt(10, 85, true, "CLAW %s %dmV %.0f/%.0fms           ", info.claw.status,
+                           info.claw.millivolts, info.claw.elapsed_ms, info.claw.duration_ms);
+      Brain.Screen.printAt(10, 110, true, "CMD %s X%d H%d                   ", info.lift.command_status,
+                           info.input.toggle, info.output.toggle_piston);
+      Brain.Screen.printAt(10, 135, true, "%s ZERO%d T%.1fdeg dt=%.0fms       ", info.lift.status,
+                           info.lift.homed, info.lift.target_deg, info.lift.control_dt_ms);
+      Brain.Screen.printAt(10, 160, true, "LIFT %.1f L%.1f R%.1f V%d/%d      ", info.lift.position_deg(),
+                           info.lift.left_deg, info.lift.right_deg, info.lift.left_mV, info.lift.right_mV);
+      const char* labels[6] = {"CLAW OPEN", "CLAW CLOSE", "CANCEL CLAW", "ZERO LIFT", "LIFT TEST", "CANCEL LIFT"};
+      Brain.Screen.setFillColor(vex::black);
+      for (int button = 0; button < 6; ++button) {
+        const int x = button % 3 * mechanisms::BUTTON_WIDTH;
+        const int y = button < 3 ? mechanisms::CLAW_PANEL_TOP : mechanisms::PANEL_TOP;
+        Brain.Screen.drawRectangle(x, y, mechanisms::BUTTON_WIDTH, mechanisms::PANEL_HEIGHT);
+        Brain.Screen.printAt(x + 8, y + 22, true, "%s", labels[button]);
+      }
+    } else if (info.autonomous_period) {
+      Brain.Screen.printAt(10, 185, true, "LIFT %s %.1f/%.1f V%d/%d       ", info.lift.status,
+                           info.lift.position_deg(), info.lift.target_deg, info.lift.left_mV, info.lift.right_mV);
+      Brain.Screen.printAt(10, 210, true, "ZERO%d CMD %s dt=%.0fms          ", info.lift.homed,
+                           info.lift.command_status, info.lift.control_dt_ms);
+    }
 #if BARTMOSS_HIGH_SPEED
     vex::wait(500, vex::msec);
 #else

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, TURN_PROFILE_HEADER, CORNER_HEADER, ROLLING_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER } from '../scripts/monitor-drive-websocket.mjs';
+import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, TURN_PROFILE_HEADER, CORNER_HEADER, ROLLING_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER, LIFT_HEADER } from '../scripts/monitor-drive-websocket.mjs';
 
 // 协议契约测试：模拟串口跨消息分片，不能将半行误写成完整样本。
 const received = [];
@@ -238,3 +238,37 @@ assert.equal(rollingParser.malformed, 8);
 const tooManyTurns = [...rolling.slice(0, 16), '0', '17'];
 rollingParser.push(`DRL,${tooManyTurns.join(',')}\n`);
 assert.equal(rollingParser.malformed, 9);
+
+// LIFT_PROTOCOL_CHECKS: standalone lift records must work without chassis records.
+{
+  const rows = [];
+  const wrongChannel = () => assert.fail('抬升数据不能写入底盘数据通道');
+  const liftParser = new DriveLines(...Array(14).fill(wrongChannel), row => rows.push(row));
+  const zero = ['1','1000','1','0','0','0','0','0','0','0','ZEROED'];
+  const moving = ['2','1500','1','1','1.2','1.1','60','6000','6000','100','MOVING'];
+  const stall = ['3','2000','1','4','0','0','60','0','0','600','STALL'];
+  const stream = `#web#DLF,${zero.join(',')}\r\nDLF,${moving.join(',')}\nDLF,${stall.join(',')}\n`;
+  for (let i = 0; i < stream.length; i += 3) liftParser.push(stream.slice(i, i + 3));
+  assert.equal(LIFT_HEADER.split(',').length, 11);
+  assert.deepEqual(rows, [zero, moving, stall]);
+  assert.equal(liftParser.lifts, 3);
+  for (const [index, value] of [[2,'1.0'], [3,'5'], [4,'NaN'], [7,'12001'], [9,'-1'], [10,''], [10,'BAD,STATUS']]) {
+    const bad = [...zero]; bad[index] = value;
+    liftParser.push(`DLF,${bad.join(',')}\n`);
+  }
+  assert.equal(liftParser.malformed, 7);
+  assert.equal(liftParser.lifts, 3);
+  assert.equal(liftParser.pending, '');
+
+  // 新抬升回调追加在末尾，不能改变新版 DPO/DRL 的现有位置。
+  const poseRows = [], rollingRows = [], liftRows = [];
+  const combined = new DriveLines(...Array(12).fill(wrongChannel),
+    row => poseRows.push(row), row => rollingRows.push(row), row => liftRows.push(row));
+  const combinedStream = `DPO,${poseRecords[1].join(',')}\nDRL,${rolling.join(',')}\nDLF,${moving.join(',')}\n`;
+  for (let i = 0; i < combinedStream.length; i += 3) combined.push(combinedStream.slice(i, i + 3));
+  assert.deepEqual(poseRows, [poseRecords[1]]);
+  assert.deepEqual(rollingRows, [rolling]);
+  assert.deepEqual(liftRows, [moving]);
+  assert.equal(combined.malformed, 0);
+}
+console.log('Lift protocol checks passed: zero, motion, fault, serial fragments, invalid rows and DPO/DRL coexistence.');
