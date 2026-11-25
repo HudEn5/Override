@@ -3,6 +3,7 @@
 #include "driver-control-logic.h"
 #include "vex.h"
 #include "drive-control.h"
+#include "mechanisms.h"
 
 extern vex::brain Brain;
 extern vex::controller Controller;
@@ -25,6 +26,7 @@ extern vex::digital_out* TogglePiston;
 namespace hardware {
 bool Initialize();
 manual::input ReadInput();
+mechanisms::feedback ReadMechanismFeedback();
 void Apply(const manual::output& output, bool write_drive = true, bool brake_drive = false);
 void GetDriveMotorCount(int& left_count, int& right_count);
 drive::feedback ReadDriveFeedback();

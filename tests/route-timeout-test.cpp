@@ -4,7 +4,7 @@
 #include <limits>
 #include <cstdio>
 
-// 分别用旧接口的最大参数个数编译，九种动作漏写timeout都必须失败。
+// 所有路线工厂漏写最后的timeout都必须编译失败。
 #ifdef MISSING_ROUTE_TIMEOUT
 void MissingTimeout() {
   using namespace route;
@@ -24,8 +24,20 @@ void MissingTimeout() {
   Wait(100);
 #elif MISSING_ROUTE_TIMEOUT == 7
   PushFor(100, 4);
-#else
+#elif MISSING_ROUTE_TIMEOUT == 8
   DriveTurnDrive(100, 90, 100, turn_mode::rolling, 150, 100);
+#elif MISSING_ROUTE_TIMEOUT == 9
+  StartMechanism(mechanism::channel::arm, 1);
+#elif MISSING_ROUTE_TIMEOUT == 10
+  WaitMechanism(mechanism::channel::arm);
+#elif MISSING_ROUTE_TIMEOUT == 11
+  DriveStraightWithTrigger(100, 100, 50, mechanism::channel::arm, 1, 1000);
+#elif MISSING_ROUTE_TIMEOUT == 12
+  LiftTo(100);
+#elif MISSING_ROUTE_TIMEOUT == 13
+  ClawOpen(300, 12.0);
+#else
+  ClawClose(500, 12.0);
 #endif
 }
 #endif

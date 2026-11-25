@@ -5,6 +5,7 @@
 #include "autonomous.h"
 #include "competition-control.h"
 #include "startup-mode.h"
+#include "mechanisms.h"
 #if BARTMOSS_CALIBRATION
 #include "calibration-control.h"
 #endif
@@ -30,6 +31,8 @@ struct runtime_info {
   double dt = 0;
   test_info test;
   autonomous_info automatic;
+  mechanisms::lift_info lift;
+  mechanisms::claw_info claw;
   competition_request phase;
 #if BARTMOSS_HIGH_SPEED
   tuning_metrics tuning;

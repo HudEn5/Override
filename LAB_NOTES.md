@@ -1,12 +1,12 @@
 # 当前实验记录
 
-当前开发版 **2.1.0-point1**，程序提交2249f44，分支feat/odometry；main发布基线92eba1f。新位姿、turn3、MoveToPoint与Swing已通过软件检查，尚未完成本轮实车验证。
+当前开发版 **2.2.0-dev.1**，分支feat/odometry。机构并行调度与路线合并记录见文末。开发前发布基线为v2.1.0-beta.2（3918b74）。当前默认10号机构路线，等待实车验收。
 
 ## 当前参数与待测事项
 
 - 硬件/前馈以include/control-config.h为准；速度与规划以include/performance-config.h为准；测试档位在include/test-config.h。
 - 最高540电机rpm（轮端450rpm），原地角加减速1200/1000度每秒²；制动预留100ms，滤波20ms，最低60/30rpm。原0.8°与零速门槛保留，自动无额外确认，X单项250ms。
-- 验证顺序：静止/前后/原地转向核对位姿 → 单条短距离MoveToPoint → 左右Swing → 再编排路线。
+- 当前待验收：10号路线首周期闭爪、抬升与直行并行、开爪及整条路线取消；7号MoveToPoint和8/9号Swing复测路线保留，历史单轮通过不代替新机构验收。
 - MoveToPoint终点5mm容差与当前高速参数待实车确认；Swing固定侧可能滑移。模型结果不可替代物理测量。
 - 由用户从VS Code下载；采集按Y开关，场控连接时关闭。记录现场版本、负载、电池、原始数据文件、终点测量及故障状态。
 
@@ -313,3 +313,58 @@ RouteTurnControl关闭实验档时显式恢复历史240rpm/s；基础TurnControl
 ## 2026-11-20：并行机构开发前发布beta.2基线
 
 用户要求先将现有程序上传，再开始机构接口/并行路线/模拟验证。将已通过readiness1完整回归的当前版本标为2.1.0-beta.2，包含LF16、就绪诊断与文档修复；下载description保留。仅准备上传该基线，不将后续机构开发混入同一次发布。个人编辑器配置不提交。
+
+
+## 2026-11-20：beta.2上传完成后开发mechanism1机构并行框架
+
+先发布已有程序：本地提交3918b74c318c561df1597d12cde8174d82d37edb，版本2.1.0-beta.2；通过本机已启用代理的单次git参数完成fetch和atomic push，main/feat/odometry/v2.1.0-beta.2均已ls-remote核对，不修改全局Git/系统代理、不强推，个人编辑器配置未提交。随后本地开发2.2.0-dev.1，新开发内容尚未推送；发布标签可回看开发前程序。
+
+机构框架只新增include/mechanism-control.h，仍22头文件/11实现文件，无新线程。arm/claw/piston三通道，适配器接口Start/Update/Info/Cancel，preset待同事定义；输出电压与停止方式、状态/失败原因由适配器给出，不能自行写电机或阻塞，原因必须不可变静态字符串。main唯一输出点前合并，runtime_info原mutex复制整包机构状态。StartMechanism与WaitMechanism、DriveStraightWithTrigger三个新工厂预算必填，后台独立deadline，末端隐式等待未完成机构，超时/故障/取消/禁用取消全路线并撤压；同通道运行时拒绝覆盖，同一适配器不能绑定多通道。直行触发支持正反距离、零点和终点容差，当前不支持rolling/Point内部触发；未绑定后端在触发直行起步前拒绝，避免空跑。
+
+自动正常结束撤压但保留机构完成停止方式，故障/取消采用Cancel指定方式；手臂/夹爪输出支持configured/coast/brake/hold，硬件仅在停止或显式方式变化时更新，避免循环改写hold点。自动退出只交接停止方式，新的手控非零指令优先；气动最后状态同步回driver_control，防止手控恢复翻转。真实后端未绑定，默认仍路线7、原电机配置和运动参数，模拟器仅在tests中，不能编入实车冒充抬臂控制；无下载/启动操作。
+
+验证：mechanism1-host.log的39程序与12种漏timeout拒绝编译同批通过；默认/低速/场控/标定/高速首次SDK通过，协议检查通过。末次完成停止方式修正后的机构/route-timeout/route-sequence复查见mechanism1-final-route-debug.log；机构首次单项mechanism1-final-route.log曾断言失败，加入输出诊断后重编译通过，不能声称仅靠重编译解决根因。随后同一二进制100次运行以及ASan/UBSan一次通过（mechanism1-stress.log，101个通过标记），未放宽断言。最终三个模式的runtime快照测试新增跨线程机构preset/时间/输出关联检查，结果见mechanism1-snapshot.log。
+
+SDK末次检查Test通过，Competition和Calibration的telemetry编译曾出现Clang8 frontend signal崩溃，分别重试通过；HighSpeed/Default最后通过。原始失败、崩溃预处理cpp/sh均保存build/logs/mechanism1-*，不上传隐私路径诊断文件；构建通过不代表编译器崩溃根因已解决。最终对应日志mechanism1-final-Test、mechanism1-recheck-Competition、mechanism1-calibration-retry、mechanism1-complete-HighSpeed/Default。Default最后活动产物为2.2.0-dev.1。
+
+接入说明与实际路线示例放docs/ROUTE_GUIDE.md“机构与底盘并行”，真实目标编号、归零、完成/故障检测与传感器保护由同事交付，实车到位精度和hold/coast物理效果仍待验证。未把模拟通过计作实车验收，未修改下载description、路线7或低/高速运动参数。
+
+## 2026-11-21：EZ-Template同事测试数据交接包
+
+按用户要求在build/exports/Bartmoss_EZ_Transfer_2026-11-21.zip生成交接包，1021013字节、624文件，SHA256=678d53546e47c89b8f908ac885aa1fb44f5432d4c281966685469b7e1bd19fab。包含build/data现存487份原始文件、52采集编号、全量CSV/历史分析/空采集，原始文件逐项SHA256一致；按轮重建索引，不只挑成功数据。包括实车测试矩阵/关键数字/测量边界、硬件与参数、已发布beta2配置和本地2.2-dev未提交参考源码/39测试、软件失败及复查日志；未包含SDK、认证、用户VS Code配置、预处理崩溃源码或可执行固件。
+
+回传说明区分PROS原生终端与VEX扩展WebSocket，依据官方CLI源码确认pros terminal v5 --output及无线用户通道；原PROS支持COBS，优先原生终端，不盲目禁用COBS来套用旧接收器。附纯C++11按键2Hz记录器、离线EZT文本转CSV工具，未知数用nan/CSV空白，不编造rpm目标或位置；记录器不写电机、不创建任务，场控/断线关闭。新工具Node测试、C++严格编译及3条输出→CSV闭环通过，ZIP CRC和624文件清单验证通过。未重新跑底盘全套或在同事PROS项目实测，原始失败/撞障碍/取消和LM异常记录均保留并说明排除范围；未改机器人代码、未下载、未发送消息、未上传数据GitHub。包内README_CN和DATA_RETURN_CN供同事先读。
+
+## 2026-11-22：mechanism2接入同事抬升与夹爪
+
+用户授权接入origin/抬升机构封装（b70b20224ff95e39364a5c6ac1014e8c08b118a7），并要求指出修改位置。选取纯算法，不整分支合并：该分支基于beta.1，存在LF12、独立抬升写电机线程、Y抬升和持续回传行为，与当前配置冲突。将所需状态/PID/控制器集中在一个新增mechanisms.h，主循环读取ArmL/ArmR位置与转速（rpm乘6为度/秒），按ARM_UP_DIRECTION统一正向，再由静态适配器接现有机构调度。main仍唯一写电机，不新增线程或遥控器打印。
+
+自动目标预设lift_start=0度、lift_raised=240度（平均电机输出轴角度）；范围0～600，PID100/20/8，上限12V/2.5V，一次起步助推12V/100ms或1度，容差2度、停稳200ms，堵转600ms和反馈间隔100ms保护。夹爪预设open/close为6V/200ms，方向沿用CLAW_CLOSE_DIRECTION；结束及取消hold。首次有效反馈仅设一次相对零点，不额外驱动找限位，启动前须放机械起点；丢失后不静默重置，重新摆起点并重启。毫米入口未标定、未暴露为路线预设。保留手控R1/R2的12V/4V及其他按键，piston自动后端暂未绑定；默认路线7和底盘参数不改，仅route.cpp引入具名机构预设头文件，避免默认自动抬臂。
+
+适配器Start现在显式接收timeout_ms，调度器将用户路线预算原样传给控制器；Observe在同一主循环提供当前帧，Update拒绝旧帧；同事PID含积分限幅、抗饱和、速度阻尼，沿用现参数，未声称新实车整定。新增mechanism-backend-test覆盖非同值编码器起点、目标电压、到位/下降、取消、堵转、离线不重置、旧帧/非法预设/时间、夹爪正反方向和定时/超时、未标定高度拒绝。现23头文件/11实现文件。
+
+验证：build/logs/host-tests-20261122-220726-448.log包含40宿主机程序及12漏timeout编译检查，同批完成exit0；五种SDK均成功，日志build-Test-20261122-220902-466、build-Competition-20261122-220907-933、build-Calibration-20261122-220913-244、build-HighSpeed-20261122-220918-603、build-Default-20261122-220924-071。Default为末次活动输出。历史间歇断言/编译器崩溃记录仍保留，不把本轮通过当作历史根因已修复。未下载、未运行机器人、未实车、未提交或推送；个人编辑器改动与下载description保留。
+
+## 2026-11-22：mechanism3择优合并Override.rar路线
+
+用户提供微信目录Override.rar，授权比较差异并吸收合并。压缩包源码只解包到build/archive-review-20261122，不导入其.git、设置、指令文件或工具；原包与当前个人编辑器改动保留。对照确认底盘运动、前馈/速度PID/梯形规划、位姿和权限等12个关键文件与当前源文件完全一致，control-config硬件端口/方向/手控电压也相同。机构PID/夹爪控制器去空白及注释比较一致，主要差异为线程调度、直接路线接口、夹爪12V、调试界面与回传策略。
+
+包内路线10首条ClawClose(500,1000)在Autonomous.Update中先执行，main随后才observe权限；菜单转自动首周期用旧disabled状态，返回DISABLED/FEEDBACK且0V。路线忽略返回值并直接推进，故障被普通Wait掩盖。build/archive-review-20261122/claw-startup-repro.cpp直接链接包内autonomous.cpp/route.cpp复现：原顺序0V并进入WAIT；先observe后12V/500ms至DONE；离线仍被路线跳过。首次复现脚本误按本地6V断言，核实包内claw_config为12V后修正测试期望，复现通过，未改包内源码。
+
+合并选择：保留本地统一调度、独立超时、通道互斥、等待/距离触发、故障/取消联动和末端join；吸收直接填写参数的LiftTo(target_deg,timeout)、ClawOpen/Close(duration_ms,volts,timeout)，额外必填正电压<=12V，原预设6V/200ms保持，直接12V后预设会恢复6V。请求转换为mechanism::request，三个工厂复用mechanism_start，不重编遥测动作编号、不额外开线程。默认切10号：ClawClose500ms/12V/1000预算，WaitMechanism1000预算，Wait500/1000，LiftTo100/6000与DriveStraight300/540/5000并行，ClawOpen300/12V/1000，末端等全部机构完成。把原先从闭爪起等待1000ms拆为先确认500ms闭爪结束再等500ms，时长意图保留，失败立即停止。0～9原底盘路线保留，LF16/Claw15/IMU4、手控6V、底盘高速参数不改。
+
+未带入包内独立抬升写电机线程（其邮箱确有mutex，不能笼统归因多线程不可靠）、Y抬升或本地自动回传。main在路线Update前Observe机构，仍是唯一电机写入者。吸收机构状态调试，lift/claw状态和角度/目标/时长随原mutex运行快照发布；显示线程读快照，不再另读手臂电机，主控屏幕显示两行，不加无线打印或高频遥控器更新。23头文件/11实现文件保持，VERSION仍2.2.0-dev.1。
+
+验证：build/logs/host-tests-20261122-230119-311.log的42入口同批通过（41项常驻，外加真实路线10专项），15种漏timeout编译拒绝通过。direct-mechanism-test固定机构组合覆盖首周期闭爪、并行/末端join、12V后预设6V、角度/电压/时长非法参数、超时、离线、旧帧和禁用撤输出。其首次模型漏填底盘几何，报TP CONFIG，补为实物69.85mm/1.2后通过，未为该失败修改生产参数。实际src/route.cpp通过BARTMOSS_IMPORTED_ROUTE专项链接验证，并从常驻脚本移出，避免用户日后改路线角度/目标就被旧固定路线断言误报；常驻current-route仍检查实际源码启动/禁用。五种SDK均一次成功：build-Test-20261122-230121-292、build-Competition-20261122-230127-222、build-Calibration-20261122-230132-757、build-HighSpeed-20261122-230138-183、build-Default-20261122-230143-661，Default为最后活动输出。git diff --check通过，下载description与个人编辑器改动保持。未实车、未下载/启动、未提交或推送，历史间歇失败根因没有借本轮通过宣称已修复。
+
+## 2026-11-23：integrity1整体完整性与统一性核查
+
+检查生产include/src的引用关系、全部硬件端口、启动/场控权限、主循环机构Observe/Update/Apply顺序、超时/故障/取消与手控交接、共享快照mutex、路线工厂必填参数、版本/下载配置、文件数量和当前操作文档。发现并修复三类边界问题：scheduler启动不推进自身时钟，100ms启动后可能接受50ms更新；复用Info中上一条request引用时，清理旧动作会覆盖待重放参数；抬升/夹爪内部超时先于同周期完成，和Wait/调度器截止规则不一致。现Start同步时钟、Reset拒绝非法时刻、请求按值传入，机构截止时刻已经完成允许DONE，迟到或尚未完成一律撤压报TIMEOUT，不延长预算或改运动参数。
+
+新增回归先在旧代码上确认时间回退/截止边界失败，日志integrity-mechanism-before.log、integrity-deadline-before.log；修复后调度/后端单项通过，快照重放、NaN Reset、精确截止完成/迟到/未完成边界纳入测试。README重复的默认路线7说明、ROUTE_GUIDE的当前7号选择、ARCHITECTURE旧文件/接口数量及LAB_NOTES首页旧2.1版本已统一；历史阶段记录保留。仍23头文件/11实现文件，默认10号不变，端口/方向/控制参数/Y与无线频率不改，下载description按已验证兼容要求保留，个人编辑器改动保留。
+
+五种SDK构建通过：build-Test-20261122-235750-051、build-Competition-20261122-235756-695、build-Calibration-20261122-235802-429、build-HighSpeed-20261122-235808-476、build-Default-20261122-235814-372，Default最后活动输出。宿主机首轮host-tests-20261122-235748-317.log在route-entry编译阶段发生GCC11内部错误fixup_reorder_chain/cfgrtl.c:3968，未计为通过；同一O2/严格告警命令重编译及运行通过，日志integrity-route-entry-recheck.log。完整复跑host-tests-20261123-000103-310.log的41项和15种缺timeout编译拒绝全部通过，未放宽断言或替换编译器；脚本现在输出当前检查项名称，便于定位中断。内存/未定义行为检查：integrity-sanitize-route.log、integrity-sanitize-backend.log，ASan+UBSan两项通过。GCC内部崩溃原因仍未定位，不把复跑通过当作根因修复；历史间歇断言和Clang崩溃限制继续保留。git diff --check及配置/头引用/格式检查通过，未实车、未下载或运行机器人、未提交/推送。
+
+## 2026-11-25 手控恢复满电压与 GitHub 同步
+
+手控底盘满杆上限从6000mV恢复到12000mV。默认固件构建通过，日志为build-Default-20261125-182439-666.log。此版同步前述机构并行调度、10号路线及时间和故障处理修复，版本为2.2.0-dev.1。10号路线仍待实车验收。

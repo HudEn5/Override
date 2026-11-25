@@ -24,6 +24,8 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
     return;
   }
   if (!previously_permitted) {
+    Mechanisms.Reset(now);
+    trigger_pending = false;
     Chassis.Reset();
     Turning.Reset();
     Cornering.Reset();
@@ -43,6 +45,10 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
     info.status = "RUN";
   }
   previously_permitted = true;
+  if (info.active && !Mechanisms.Update(now)) {
+    FinishRoutine(Mechanisms.Info().fault);
+    return;
+  }
   if (info.active && waiting_ready) {
     if (!feedback.motors_online || !feedback.inertial_ready || !feedback.velocity.valid ||
         !feedback.position.valid || !feedback.stopped) {
@@ -83,6 +89,8 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
   if (ActiveState() == drive::motion_state::error || ActiveState() == drive::motion_state::cancelled)
     FinishRoutine(ActiveStatus(), ActiveState() == drive::motion_state::cancelled ? route_result::cancelled
                                                                                   : route_result::error);
+  if (info.active && !FireMechanismTrigger())
+    return;
   if (info.active)
     RunRoutine();
   if (!OwnershipValid())
@@ -106,6 +114,40 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
       action_started_at = route_time;
       bool started = false;
       switch (command.kind) {
+        case route::action::mechanism_start: {
+          auto request = command.mechanism_request;
+          if (request.kind == mechanism::operation::preset)
+            request.preset = command.preset;
+          if (!Mechanisms.Start(command.mechanism_channel, request, command.timeout_ms, route_time)) {
+            FinishRoutine(Mechanisms.Info().fault);
+            return;
+          }
+          ++info.step;
+          continue;
+        }
+        case route::action::mechanism_wait:
+          if (!Mechanisms.Claimed(command.mechanism_channel)) {
+            FinishRoutine("MECH NOT STARTED");
+            return;
+          }
+          info.motion = autonomous_motion::none;
+          info.waiting = true;
+          started = true;
+          break;
+        case route::action::straight_trigger:
+          if (!std::isfinite(command.trigger_mm) || command.trigger_mm < 0 ||
+              !std::isfinite(command.distance_mm) || command.trigger_mm > std::fabs(command.distance_mm) ||
+              command.preset < 0 || !std::isfinite(command.mechanism_timeout_ms) ||
+              command.mechanism_timeout_ms <= 0 || !Mechanisms.Available(command.mechanism_channel)) {
+            FinishRoutine("MECH TRIGGER CONFIG");
+            return;
+          }
+          trigger_command = command;
+          trigger_pending = true;
+          started = StartDriveStraight(command.distance_mm, command.maximum_rpm);
+          if (started && !FireMechanismTrigger())
+            return;
+          break;
         case route::action::drive_turn_drive:
           if (!std::isfinite(command.before_mm) || command.before_mm < 0 ||
               !std::isfinite(command.after_mm) || command.after_mm < 0 || !std::isfinite(command.angle_deg) ||
@@ -188,7 +230,10 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
       route_step_started = true;
     }
     bool done = false;
-    if (command.kind == route::action::wait) {
+    if (command.kind == route::action::mechanism_wait) {
+      info.status = "WAIT MECH";
+      done = Mechanisms.Done(command.mechanism_channel);
+    } else if (command.kind == route::action::wait) {
       info.status = "WAIT";
       done = route_time - wait_started >= command.duration_ms;
     } else {
@@ -262,11 +307,35 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
     route_step_started = false;
     info.waiting = false;
   }
-  if (info.active)
-    FinishRoutine();
+  if (info.active) {
+    // 后台动作尚未结束时，路线末端自动等待；动作原有deadline继续生效。
+    if (Mechanisms.Busy()) {
+      info.motion = autonomous_motion::none;
+      info.waiting = true;
+      info.status = "WAIT MECH";
+    } else
+      FinishRoutine();
+  }
+}
+
+bool autonomous_program::FireMechanismTrigger() {
+  if (!trigger_pending)
+    return true;
+  // 本段到位窗口也视为到达末端触发点，避免500mm请求在497.5mm完成却漏触发。
+  if (std::fabs(Chassis.Info().motion.distance_mm) < trigger_command.trigger_mm &&
+      Chassis.Info().state != drive::motion_state::done)
+    return true;
+  trigger_pending = false;
+  if (!Mechanisms.Start(trigger_command.mechanism_channel, trigger_command.preset,
+                        trigger_command.mechanism_timeout_ms, route_time)) {
+    FinishRoutine(Mechanisms.Info().fault);
+    return false;
+  }
+  return true;
 }
 
 void autonomous_program::Publish() {
+  info.mechanisms = Mechanisms.Info();
   info.drive = Chassis.Info();
   info.turn = Turning.Info();
   info.corner = Cornering.Info();
@@ -346,7 +415,9 @@ bool autonomous_program::OwnershipValid() const {
          (Pushing.Info().state != motion_state::running || info.motion == autonomous_motion::push);
 }
 
-void autonomous_program::CancelAll() {
+void autonomous_program::CancelAll(bool completed) {
+  trigger_pending = false;
+  Mechanisms.Cancel(completed);
   Chassis.CancelDriveStraight();
   Turning.CancelTurn();
   Cornering.CancelCorner();

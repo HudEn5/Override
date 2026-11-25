@@ -45,8 +45,8 @@ void ControllerInfoDisplay() {
 #endif
   while (true) {
     const runtime_info info = ReadRuntimeInfo();
-    const double left = ArmL ? ArmL->position(vex::deg) * config::ARM_UP_DIRECTION : 0;
-    const double right = ArmR ? ArmR->position(vex::deg) * config::ARM_UP_DIRECTION : 0;
+    const double left = info.lift.left_deg;
+    const double right = info.lift.right_deg;
     if (Controller.installed()) {
       char lines[3][20];
       snprintf(lines[0], sizeof(lines[0]), "U%+.1f L%.0f R%.0f", info.output.arm_mV / 1000.0, left, right);
@@ -148,9 +148,10 @@ void ControllerInfoDisplay() {
                          : info.pose.valid     ? "OK"
                                                : "WAIT",
                          l, r);
-    Brain.Screen.printAt(10, 185, "U=%5d AL=%5.1f AR=%5.1f      ", info.output.arm_mV, left, right);
-    Brain.Screen.printAt(10, 210, "R1=%d R2=%d ARM=%d dt=%4.0fms      ", info.input.arm_up,
-                         info.input.arm_down, info.output.arm_enabled, info.dt);
+    Brain.Screen.printAt(10, 185, "ARM Z%d %.1f/%.1f %s                 ", info.lift.homed,
+                         info.lift.position_deg(), info.lift.target_deg, info.lift.status);
+    Brain.Screen.printAt(10, 210, "CLAW %.1fV %.0f/%.0fms %s            ", info.output.claw_mV / 1000.0,
+                         info.claw.elapsed_ms, info.claw.duration_ms, info.claw.status);
     Brain.Screen.printAt(10, 235, true, "%s %s                                  ", Environment(),
                          info.local_selection && info.local_mode == runtime::local_mode::select
                              ? "A:AUTO B:MANUAL X:TEST"

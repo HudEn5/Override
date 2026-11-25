@@ -5,10 +5,10 @@
 - LF已由用户从12移到16号口，ratio6_1/true不变；不得恢复成12。其余左侧1/11/13与右侧6/5/9/10保持。
 - readiness1：测试/H档先检查MOTOR OFF/IMU WAIT/POSITION ERR/SPEED ERR再判断MOVING；本地A自动额外检查位姿valid/needs_reset/200ms新鲜度。POSE RESET:RESTART要求回已知起点再重启，不自动清坐标；X独立测试和场控许可不受本地位姿门控影响。auto_status沿原mutex快照发布。RouteTurnControl关闭实验档恢复240rpm/s，当前高速配置不变。
 
-- 当前预发布版本2.1.0-beta.2，开发分支feat/odometry；用户已授权将当前程序上传GitHub并由助手定版本。旧main基线92eba1f（2.0.6-route3），core-v2.0.0为历史标签；发布时只允许快进，不强推，保留当前开发分支及用户编辑器改动。
-- 当前TEST_ROUTE=7，MoveToPoint(300,300,400,300,10000)修正候选待实车；原点位8.28mm推算终点超差记录保留。Swing新参数两侧各一轮DONE，均1273ms，停后误差约0.51/0.30度，重复性待验；多弯也有单轮DONE。
-- 手控独立6V上限，自动540电机rpm上限，21个头文件/11个实现文件。所有route动作显式timeout，A/B/X和场控权限不变；不要自动下载或启动机器人。
-- 宿主机38项入口及模型已分阶段检查，曾有间歇断言，单项复查通过但根因未定位。预发布不代表完整实车验收。日志入口LAB_NOTES.md，历史阶段参数勿当现用配置。
+- 当前开发版2.2.0-dev.1，本次同步目标为远端main和feat/odometry。机构开发前基线见v2.1.0-beta.2（3918b74）。当前开发分支feat/odometry。同步仅快进，个人编辑器配置保留在本地。
+- 用户授权吸收合并RAR后，当前TEST_ROUTE=10：12V闭爪500ms并等待完成，再等待500ms，LiftTo100度与直行300mm并行，12V开爪300ms，末端等所有机构完成。0～9号原路线保留，路线7仍为MoveToPoint修正复测；历史8.28mm误差及Swing单轮DONE不代表新机构验收。
+- 手控底盘满杆12V，自动540电机rpm上限，23个头文件/11个实现文件。所有route动作显式timeout，A/B/X和场控权限不变；不要自动下载或启动机器人。
+- 最新integrity1核查：常驻41项及15种缺timeout检查完整复跑通过，五种SDK构建通过，机构调度/后端ASan+UBSan通过；首轮宿主机GCC11发生内部崩溃，原命令复查和完整复跑通过但根因未定位。历史间歇断言/旧Clang崩溃记录同样保留。预发布不代表完整实车验收，日志入口LAB_NOTES.md，历史阶段参数勿当现用配置。
 
 
 ## 开始工作与同步
@@ -67,3 +67,9 @@
 - point3用户要求修MoveToPoint。转后按最新位姿复核目标方位，必要时在facing阶段重新原地对准，PointControl.max_heading_realignments=2（0旧行为对照，>2拒绝），上限后POINT ALIGN停车。直行固定航向/5mm判据/总timeout不改，不增加终点重试/横向转向/坐标改写；授权仅直行前对准。当前TEST_ROUTE=7，仍300/300/400/300/10000；Swing/Turn保持，实车待复测。
 
 - 用户要求手控底盘减半：MANUAL_DRIVE_MAX_VOLTAGE=6000只控制手控混控上限，改回12000恢复；MAX_VOLTAGE=12000仍供自动控制，机构不受影响。半电压不承诺实际半转速，默认构建已生成，用户自行下载。
+
+- mechanism1：StartMechanism/WaitMechanism/DriveStraightWithTrigger预算必填；后台独立计时，路线末端自动join。机构故障/超时/禁用取消全路线，手控接管优先、气动状态延续。模拟器仅tests，无新线程/高频打印；Cancel幂等撤压。mechanism2已在main绑定同事b70b202的真实抬升/夹爪适配器，算法/参数合在mechanisms.h，不整合分支的独立电机线程、Y抬升和自动开日志。lift_start/lift_raised对应0/240电机度，范围0～600，PID100/20/8，上升12V下降2.5V；夹爪open/close均6V/200ms，结束与取消hold。首次有效反馈设一次偏移零点，启动前放机械起点，失效不自动重置；毫米映射未标定。Start接口增加timeout_ms原样接收路线预算，主循环Observe后调度Update，main仍唯一写电机者。默认路线7、LF16、Y回传及手控电压保持；piston自动后端尚未绑定。40宿主机入口及12漏参检查、五种SDK通过，真实机构待上机；未下载/启动/推送。
+
+- mechanism3覆盖上段默认路线约定：用户授权对比RAR择优合并，现TEST_ROUTE=10、0～9保留；新增route::LiftTo(deg,timeout)、ClawOpen/Close(duration_ms,volts,timeout)，参数必填，直接动作非阻塞，仍走同一mechanism::scheduler。电压正数<=12V，方向由Open/Close和CLAW_CLOSE_DIRECTION处理；预设6V不继承直接动作的12V。request.kind/target/volts经快照保存。Observe在Autonomous.Update前，启动失败/运行故障/取消均联动全路线；禁止带回原压缩包忽略返回值或独立写电机线程。主控185/210行显示lift/claw整包快照，Y和无线打印保持。新增direct-mechanism固定组合回归；真实src/route.cpp链接的BARTMOSS_IMPORTED_ROUTE专项已跑通，但不放常驻脚本，后续用户改路线不得强加10号旧参数；常驻current-route只核对启动/禁用。常驻41入口+15漏timeout检查，详情LAB_NOTES。无新增头文件/实现文件/线程，未下载或上传。
+
+- integrity1：scheduler.Start成功受理时同步推进previous_time，Reset拒绝NaN/负时钟；请求按值复制，防止重复使用Info内旧请求引用时被清理覆盖。抬升与夹爪统一为截止时刻已完成可DONE，迟到或截止时仍运行则TIMEOUT撤压；不延长预算，不改控制增益/电压/路线。新增时间回退、快照重放、非法Reset、恰好完成/迟到/未完成边界回归。README/ROUTE_GUIDE/LAB_NOTES首页统一默认路线10与2.2.0-dev.1，历史记录原样保留。下载兼容description仍保留旧v1.7.0字符串，不当作版本错误修改。具体失败及复查日志见LAB_NOTES最新条目，未实车/下载/推送。

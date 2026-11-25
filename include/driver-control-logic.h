@@ -2,6 +2,7 @@
 
 // 独立于硬件的手控逻辑，不依赖自动路线。
 namespace manual {
+enum class stopping { configured, coast, brake, hold };
 struct input {
   int y_axis = 0;
   int angular_axis = 0;
@@ -26,6 +27,7 @@ struct output {
   bool arm_enabled = false;
   int arm_mV = 0;  // 上升为正，下降为负；硬件层再处理统一方向及电机反转配置。
   int claw_mV = 0;
+  stopping arm_stop = stopping::configured, claw_stop = stopping::configured;
   bool toggle_piston = false;
 };
 
@@ -44,6 +46,9 @@ inline int AxisVoltage(int percent, int deadband, int max_mV) {
 class driver_control {
  public:
   explicit driver_control(bool toggle_piston) : piston_state(toggle_piston) {}
+  void SetPistonState(bool value) {
+    piston_state = value;
+  }
 
   output Update(const input& input, bool enabled, int deadband, int max_mV, int arm_up_mV, int arm_down_mV,
                 int claw_mV) {

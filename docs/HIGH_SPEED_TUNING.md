@@ -1,6 +1,6 @@
 # 高速测试与性能参数
 
-当前预发布版2.1.0-beta.2，参数以performance-config.h为准；历史阶段说明见[整定历史](history/TUNING_LEGACY.md)，原地转向细节与数据见[转向整定](TURN_TUNING.md)。
+当前工作区2.2.0-dev.1，运动参数沿用已发布2.1.0-beta.2，以performance-config.h为准；历史阶段说明见[整定历史](history/TUNING_LEGACY.md)，原地转向细节与数据见[转向整定](TURN_TUNING.md)。
 
 ## 参数入口与单位
 

@@ -1,13 +1,14 @@
 #include "autonomous.h"
+#include "mechanisms.h"
 
 namespace {
 // 只改这个编号选择路线，重新编译下载；一次只运行一组，不会连续跑完所有测试。
 // 0 原点位；1 直行往返；2 左L；3 右L；4 多弯；5 原地转角；6 三点闭合。
-// 7 单点MoveToPoint；8 左侧固定Swing；9 右侧固定Swing，一次只测试一个动作。
-constexpr int TEST_ROUTE = 7;
+// 7 单点MoveToPoint；8 左侧固定Swing；9 右侧固定Swing；10 同事的机构配合路线。
+constexpr int TEST_ROUTE = 10;
 // 仅4号路线：true为降速转向，false恢复原来的直行→原地转向。
 constexpr bool ROLLING_ROUTE = true;
-static_assert(TEST_ROUTE >= 0 && TEST_ROUTE <= 9, "Invalid TEST_ROUTE");
+static_assert(TEST_ROUTE >= 0 && TEST_ROUTE <= 10, "Invalid TEST_ROUTE");
 }  // 命名空间
 
 // 距离/坐标为mm，转角为逆时针正度数；速度为电机输出轴rpm。
@@ -69,6 +70,11 @@ void autonomous_program::RunRoutine() {
 
     case 9:  // 右侧制动、左侧驱动，顺时针90度；与8号路线镜像对照。
       RunRoute({Swing(-90, drive::pivot_side::right, 300, 5000)});
+      return;
+
+    case 10:  // 同事路线：先闭爪，再抬升并前进，最后开爪；所有机构受统一超时/取消管理。
+      RunRoute({ClawClose(500, 12.0, 1000), WaitMechanism(mechanism::channel::claw, 1000), Wait(500, 1000),
+                LiftTo(100, 6000), DriveStraight(300, 540, 5000), ClawOpen(300, 12.0, 1000)});
       return;
   }
 }

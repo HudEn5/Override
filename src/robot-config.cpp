@@ -24,6 +24,9 @@ namespace {
 vex::motor** const LeftDrive[4] = {&LF, &LM, &LBD, &LBU};
 vex::motor** const RightDrive[4] = {&RF, &RM, &RBD, &RBU};
 bool arm_moving = false;
+bool claw_moving = false;
+vex::brakeType last_arm_stop = config::ARM_BRAKE_MODE;
+vex::brakeType last_claw_stop = config::CLAW_BRAKE_MODE;
 vex::inertial* Inertial = nullptr;
 vex::timer InertialTimer;
 bool inertial_calibration_started = false;
@@ -127,6 +130,18 @@ void SetVoltage(vex::motor* motor, int millivolts) {
   else
     motor->spin(vex::fwd, millivolts, vex::voltageUnits::mV);
 }
+vex::brakeType StopMode(manual::stopping mode, vex::brakeType configured) {
+  switch (mode) {
+    case manual::stopping::coast:
+      return vex::coast;
+    case manual::stopping::brake:
+      return vex::brake;
+    case manual::stopping::hold:
+      return vex::hold;
+    default:
+      return configured;
+  }
+}
 }  // 匿名命名空间
 
 namespace hardware {
@@ -157,7 +172,7 @@ bool Initialize() {
   }
   ArmL = CreateMotor(config::ArmL, config::ARM_BRAKE_MODE);
   ArmR = CreateMotor(config::ArmR, config::ARM_BRAKE_MODE);
-  // 编码器归零仅用于观察位移，不参与电压控制，也不要求从机械起点启动。
+  // 保留原显示归零；自动抬升还会记录首帧偏移，启动前须把手臂放在机械起点。
   if (ArmL) {
     ArmL->setPosition(0, vex::deg);
   }
@@ -176,6 +191,22 @@ bool Initialize() {
     }
   }
   return true;
+}
+
+mechanisms::feedback ReadMechanismFeedback() {
+  mechanisms::feedback result;
+  result.arm_online = ArmL && ArmR && ArmL->installed() && ArmR->installed();
+  result.claw_online = Claw && Claw->installed();
+  if (result.arm_online) {
+    // 正值统一为抬升方向；两侧安装差异已由电机 reversed 处理。
+    result.left_deg = ArmL->position(vex::deg) * config::ARM_UP_DIRECTION;
+    result.right_deg = ArmR->position(vex::deg) * config::ARM_UP_DIRECTION;
+    result.left_deg_s = ArmL->velocity(vex::rpm) * 6.0 * config::ARM_UP_DIRECTION;
+    result.right_deg_s = ArmR->velocity(vex::rpm) * 6.0 * config::ARM_UP_DIRECTION;
+    result.arm_valid = std::isfinite(result.left_deg) && std::isfinite(result.right_deg) &&
+                       std::isfinite(result.left_deg_s) && std::isfinite(result.right_deg_s);
+  }
+  return result;
 }
 
 manual::input ReadInput() {
@@ -216,20 +247,32 @@ void Apply(const manual::output& output, bool write_drive, bool brake_drive) {
   }
   const bool arm_ready = ArmL && ArmR && ArmL->installed() && ArmR->installed();
   const int voltage = output.arm_enabled && arm_ready ? output.arm_mV : 0;
+  const auto arm_stop = StopMode(output.arm_stop, config::ARM_BRAKE_MODE);
   if (voltage != 0) {
     // 两台电机同周期接收电压，左右安装方向由各自的反转配置处理。
     ArmL->spin(vex::fwd, voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
     ArmR->spin(vex::fwd, voltage * config::ARM_UP_DIRECTION, vex::voltageUnits::mV);
     arm_moving = true;
-  } else if (arm_moving) {
+  } else if (arm_moving || (output.arm_stop != manual::stopping::configured && arm_stop != last_arm_stop)) {
     // 仅在停止的瞬间记录内置 hold 位置，避免循环改写保持点。
     if (ArmL)
-      ArmL->stop(config::ARM_BRAKE_MODE);
+      ArmL->stop(arm_stop);
     if (ArmR)
-      ArmR->stop(config::ARM_BRAKE_MODE);
+      ArmR->stop(arm_stop);
     arm_moving = false;
+    last_arm_stop = arm_stop;
   }
-  SetVoltage(Claw, output.claw_mV);
+  const auto claw_stop = StopMode(output.claw_stop, config::CLAW_BRAKE_MODE);
+  if (output.claw_mV != 0) {
+    SetVoltage(Claw, output.claw_mV);
+    claw_moving = true;
+  } else if (claw_moving ||
+             (output.claw_stop != manual::stopping::configured && claw_stop != last_claw_stop)) {
+    if (Claw)
+      Claw->stop(claw_stop);
+    claw_moving = false;
+    last_claw_stop = claw_stop;
+  }
   if (TogglePiston)
     TogglePiston->set(output.toggle_piston);
 }

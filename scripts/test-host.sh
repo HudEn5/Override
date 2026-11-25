@@ -9,6 +9,7 @@ compiler="${CXX:-g++}"
 run() {
   local name="$1"
   shift
+  printf 'Checking %s\n' "$name"
   "$compiler" -O2 -std=c++11 -Wall -Wextra -Werror -pedantic "$@" -I include -o "build/host-tests/$name"
   "build/host-tests/$name"
 }
@@ -39,6 +40,9 @@ run route-entry src/autonomous.cpp tests/route-entry-test.cpp
 run current-route -DBARTMOSS_CURRENT_ROUTE=1 src/autonomous.cpp src/route.cpp tests/route-entry-test.cpp
 run route-sequence src/autonomous.cpp tests/route-sequence-test.cpp
 run route-timeout src/autonomous.cpp tests/route-timeout-test.cpp
+run mechanism-route src/autonomous.cpp tests/mechanism-route-test.cpp
+run mechanism-backend tests/mechanism-backend-test.cpp
+run direct-mechanism src/autonomous.cpp tests/direct-mechanism-test.cpp
 run timed-push tests/drive-push-test.cpp
 run autonomous-push src/autonomous.cpp tests/autonomous-push-test.cpp
 run startup-mode tests/startup-mode-test.cpp
@@ -53,7 +57,7 @@ run performance tests/performance-test.cpp
 run high-speed-concurrency -pthread -DBARTMOSS_HIGH_SPEED=1 -I tests/sampling-mocks src/runtime-info.cpp tests/runtime-info-test.cpp
 
 # 旧最大参数个数必须报缺少timeout，禁止默默给出默认超时。
-for kind in {0..8}; do
+for kind in {0..14}; do
   if "$compiler" -std=c++11 -fsyntax-only -I include -DMISSING_ROUTE_TIMEOUT="$kind" tests/route-timeout-test.cpp > build/host-tests/missing-timeout.log 2>&1; then
     printf 'Missing timeout unexpectedly compiled: %s\n' "$kind"
     exit 1
@@ -63,4 +67,4 @@ for kind in {0..8}; do
     exit 1
   fi
 done
-printf 'All nine route factories reject missing timeout at compile time.\n'
+printf 'All fifteen route factories reject missing timeout at compile time.\n'

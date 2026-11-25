@@ -1,5 +1,6 @@
 #include "autonomous.h"
 #include "performance-config.h"
+#include "mechanisms.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -173,6 +174,14 @@ int main() {
   autonomous_program p;
   p.Configure(config::AutoStraightControl(s), config::AutoTurnControl(t), config::RouteCornerControl(c));
   p.ConfigurePoint(config::PointControl());
+  mechanisms::lift_adapter arm;
+  mechanisms::claw_adapter claw(1);
+  assert(p.BindMechanism(mechanism::channel::arm, arm));
+  assert(p.BindMechanism(mechanism::channel::claw, claw));
+  mechanisms::feedback arm_frame;
+  arm_frame.arm_online = arm_frame.arm_valid = true;
+  arm.Observe(arm_frame, false, 0);
+  claw.Observe(true, false, 0);
   drive::straight_feedback f;
   f.position.valid = f.velocity.valid = f.motors_online = f.stopped = f.inertial_ready = true;
   drive::pose position;
@@ -184,6 +193,8 @@ int main() {
   ++f.velocity.sequence;
   position.time_ms = 20;
   p.ObservePose(position);
+  arm.Observe(arm_frame, true, 20);
+  claw.Observe(true, true, 20);
   p.Update(true, f, 20);
   assert(p.Info().run == 1 && p.Info().result != route_result::error);
   p.Update(false, f, 40);

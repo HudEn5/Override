@@ -17,6 +17,12 @@ int main() {
         assert(value.test.corner.distance_mm == value.tick * 2.0);
         assert(value.pose.x_mm == value.tick * 5.0 && value.pose.y_mm == -(value.tick * 2.0));
         assert(value.pose.heading_deg == value.tick * .25 && value.pose.valid && !value.pose.needs_reset);
+        const auto& arm = value.automatic.mechanisms.channels[0];
+        assert(arm.claimed && arm.preset == static_cast<int>(value.tick));
+        assert(arm.started_ms == value.tick * 3.0 &&
+               arm.feedback.command.motor_mV == static_cast<int>(value.tick % 12001));
+        assert(value.lift.target_deg == value.tick * 6.0 && value.lift.left_deg == value.tick * 2.0);
+        assert(value.claw.duration_ms == value.tick * 7.0 && value.claw.elapsed_ms == value.tick * 4.0);
 #if BARTMOSS_CALIBRATION
         assert(value.calibration.target_rpm == value.tick * 3.0);
 #endif
@@ -41,6 +47,15 @@ int main() {
     value.pose.y_mm = -static_cast<double>(i) * 2;
     value.pose.heading_deg = i * .25;
     value.pose.valid = true;
+    auto& arm = value.automatic.mechanisms.channels[0];
+    arm.claimed = true;
+    arm.preset = static_cast<int>(i);
+    arm.started_ms = i * 3.0;
+    arm.feedback.command.motor_mV = i % 12001;
+    value.lift.target_deg = i * 6.0;
+    value.lift.left_deg = i * 2.0;
+    value.claw.duration_ms = i * 7.0;
+    value.claw.elapsed_ms = i * 4.0;
 #if BARTMOSS_CALIBRATION
     value.calibration.target_rpm = i * 3.0;
 #endif

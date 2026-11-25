@@ -49,6 +49,10 @@ int main() {
                        config::AutoTurnControl(config::TurnControl()),
                        config::RouteCornerControl(config::CornerControl()));
   Autonomous.ConfigurePoint(config::PointControl());
+  static mechanisms::lift_adapter ArmController;
+  static mechanisms::claw_adapter ClawController(config::CLAW_CLOSE_DIRECTION);
+  Autonomous.BindMechanism(mechanism::channel::arm, ArmController);
+  Autonomous.BindMechanism(mechanism::channel::claw, ClawController);
   RegisterCompetitionCallbacks();
 #if BARTMOSS_CALIBRATION
   static calibration_control Calibration(config::CALIBRATION_VOLTAGES, config::CALIBRATION_TIMEOUT_MS);
@@ -75,6 +79,7 @@ int main() {
   double previous_time = ControlTimer.time(vex::msec);
   unsigned int tick = 0;
   bool route_field_owner = false;
+  bool route_had_control = false;
   while (true) {
     const double now = ControlTimer.time(vex::msec);
     const double dt = now - previous_time;
@@ -192,8 +197,17 @@ int main() {
       Autonomous.Update(false, frame, now);
       route_field_owner = connected;
     }
+    const auto mechanism_frame = hardware::ReadMechanismFeedback();
+    ArmController.Observe(mechanism_frame, execute_route, now);
+    ClawController.Observe(mechanism_frame.claw_online, execute_route, now);
     Autonomous.ObservePose(Odometry.Info());
     Autonomous.Update(execute_route, frame, now);
+    // 后台机构与底盘共用主循环写入点；取消时仅移交停止方式，不覆盖新的手控指令。
+    if (execute_route || route_had_control)
+      Autonomous.ApplyMechanisms(output, !execute_route);
+    if (execute_route)
+      DriverControl.SetPistonState(output.toggle_piston);
+    route_had_control = execute_route;
     if (execute_route) {
       output.left_mV = Autonomous.Info().left_mV;
       output.right_mV = Autonomous.Info().right_mV;
@@ -222,6 +236,8 @@ int main() {
     info.tick = tick++;
     info.dt = dt;
     info.automatic = Autonomous.Info();
+    info.lift = ArmController.LiftInfo();
+    info.claw = ClawController.ClawInfo();
     info.autonomous_period = execute_route;
     info.phase = request;
     PublishRuntimeInfo(info);

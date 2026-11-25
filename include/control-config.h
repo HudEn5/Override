@@ -17,7 +17,7 @@ namespace config {
 #if BARTMOSS_HIGH_SPEED != 0 && BARTMOSS_HIGH_SPEED != 1
 #error Invalid high-speed environment
 #endif
-const char PROGRAM_VERSION[] = "2.1.0-beta.2";  // 当前预发布版本，与VERSION保持一致。
+const char PROGRAM_VERSION[] = "2.2.0-dev.1";  // 当前机构开发版，与VERSION保持一致。
 const char CONTROLLER_VERSION[] = "VLT";         // 遥控器标明纯电压版本。
 // 默认高速菜单；低速测试、比赛和标定可通过独立构建参数启用。
 #ifndef BARTMOSS_COMPETITION
@@ -62,7 +62,7 @@ const Motor Claw = {15, vex::ratio18_1, true};  // 小电机
 const Motor STRUCTURE_MOTORS[3] = {ArmL, ArmR, Claw};
 const char TogglePiston = 'H';
 const bool PISTON_INITIAL_STATE = false;
-// 按键直接给电压，无目标角度、滤波、软件 PID 或电压渐变。
+// 手控按键直接给电压；自动机构目标/PID/时长在 mechanisms.h 中配置。
 // 两个值均填写正数，单位 mV；动作方向由 ARM_UP_DIRECTION 统一处理。
 constexpr int ARM_UP_VOLTAGE = 12000;
 constexpr int ARM_DOWN_VOLTAGE = 4000;
@@ -89,8 +89,8 @@ const int YAxis = 3;
 const int AngularAxis = 1;
 const int JOYSTICK_DEADBAND = 5;  // 单位为百分比；死区外重新线性映射输出
 const int MAX_VOLTAGE = 12000;
-// 仅手控底盘：6000为半电压，改回12000恢复原满杆输出。
-constexpr int MANUAL_DRIVE_MAX_VOLTAGE = 6000;
+// 手控底盘满杆输出上限，单位 mV；6000 为半电压。
+constexpr int MANUAL_DRIVE_MAX_VOLTAGE = 12000;
 const int UPDATE_TIME = 10;  // 缩短输入采样和输出更新的等待时间，实际周期可在屏幕查看。
 #if BARTMOSS_HIGH_SPEED
 constexpr int TELEMETRY_INTERVAL_MS = 500;  // 高速仅回传控制曲线和汇总，最多 2 Hz。

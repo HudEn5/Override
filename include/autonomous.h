@@ -5,6 +5,7 @@
 #include "drive-turn.h"
 #include "drive-corner.h"
 #include "drive-rolling.h"
+#include "mechanism-control.h"
 #include <initializer_list>
 #include <cstring>
 
@@ -168,7 +169,20 @@ namespace route {
 constexpr double DEFAULT_DRIVE_RPM = config::ROUTE_DRIVE_RPM;
 constexpr double DEFAULT_TURN_RPM = config::ROUTE_TURN_RPM;
 constexpr double DEFAULT_PUSH_VOLTS = 4.0;
-enum class action { straight, turn, heading, corner, wait, push, point, swing, drive_turn_drive };
+enum class action {
+  straight,
+  turn,
+  heading,
+  corner,
+  wait,
+  push,
+  point,
+  swing,
+  drive_turn_drive,
+  mechanism_start,
+  mechanism_wait,
+  straight_trigger
+};
 enum class turn_mode { stop, rolling };
 struct command {
   explicit command(action value, double timeout) : kind(value), timeout_ms(timeout) {}
@@ -180,7 +194,58 @@ struct command {
   double entry_speed_mm_s = 200;
   turn_mode transition = turn_mode::stop;
   drive::pivot_side fixed_side = drive::pivot_side::none;
+  mechanism::channel mechanism_channel = mechanism::channel::arm;
+  int preset = 0;
+  mechanism::request mechanism_request;
+  double trigger_mm = 0, mechanism_timeout_ms = 0;
 };
+// 启动后立即推进路线；timeout属于后台机构动作，等候另用WaitMechanism。
+inline command StartMechanism(mechanism::channel channel, int preset, double timeout_ms) {
+  command result(action::mechanism_start, timeout_ms);
+  result.mechanism_channel = channel;
+  result.preset = preset;
+  return result;
+}
+inline command WaitMechanism(mechanism::channel channel, double timeout_ms) {
+  command result(action::mechanism_wait, timeout_ms);
+  result.mechanism_channel = channel;
+  return result;
+}
+// 直接参数动作仍进入统一调度，启动后与底盘并行；等待用WaitMechanism。
+inline command LiftTo(double target_deg, double timeout_ms) {
+  command result(action::mechanism_start, timeout_ms);
+  result.mechanism_channel = mechanism::channel::arm;
+  result.mechanism_request.kind = mechanism::operation::lift_angle;
+  result.mechanism_request.target = target_deg;
+  return result;
+}
+// 电压大小和timeout必须显式指定，方向由Open/Close与硬件配置处理。
+inline command ClawOpen(double duration_ms, double volts, double timeout_ms) {
+  command result(action::mechanism_start, timeout_ms);
+  result.mechanism_channel = mechanism::channel::claw;
+  result.mechanism_request.kind = mechanism::operation::claw_open;
+  result.mechanism_request.target = duration_ms;
+  result.mechanism_request.volts = volts;
+  return result;
+}
+inline command ClawClose(double duration_ms, double volts, double timeout_ms) {
+  command result = ClawOpen(duration_ms, volts, timeout_ms);
+  result.mechanism_request.kind = mechanism::operation::claw_close;
+  return result;
+}
+// trigger_mm为本段从起点起的非负距离，倒车也按行程大小；两个预算均必填。
+inline command DriveStraightWithTrigger(double distance_mm, double maximum_rpm, double trigger_mm,
+                                        mechanism::channel channel, int preset, double mechanism_timeout_ms,
+                                        double timeout_ms) {
+  command result(action::straight_trigger, timeout_ms);
+  result.distance_mm = distance_mm;
+  result.maximum_rpm = maximum_rpm;
+  result.trigger_mm = trigger_mm;
+  result.mechanism_channel = channel;
+  result.preset = preset;
+  result.mechanism_timeout_ms = mechanism_timeout_ms;
+  return result;
+}
 inline command DriveStraight(double distance_mm, double maximum_rpm, double timeout_ms) {
   command result(action::straight, timeout_ms);
   result.distance_mm = distance_mm;
@@ -253,6 +318,7 @@ enum class point_phase { idle, facing, driving };
 enum class autonomous_motion { none, straight, turn, corner, push, rolling };
 
 struct autonomous_info {
+  mechanism::info mechanisms;
   bool active = false;
   bool finished = false;
   unsigned int run = 0;
@@ -297,6 +363,12 @@ class autonomous_program {
     Rolling.Configure(value, turn, corner);
   }
   void Update(bool permitted, const drive::straight_feedback& feedback, double now);
+  bool BindMechanism(mechanism::channel channel, mechanism::controller& adapter) {
+    return !info.active && Mechanisms.Bind(channel, adapter);
+  }
+  void ApplyMechanisms(manual::output& output, bool stopping_only = false) const {
+    Mechanisms.Apply(output, stopping_only);
+  }
   void ConfigurePoint(const drive::point_config& value) {
     point_settings = value;
   }
@@ -398,7 +470,7 @@ class autonomous_program {
     FinishRoutine("DONE", route_result::done);
   }
   void FinishRoutine(const char* status, route_result result = route_result::error) {
-    CancelAll();
+    CancelAll(result == route_result::done);
     point_stage = point_phase::idle;
     info.active = false;
     info.finished = true;
@@ -418,7 +490,8 @@ class autonomous_program {
   drive::motion_state ActiveState() const;
   const char* ActiveStatus() const;
   bool OwnershipValid() const;
-  void CancelAll();  // 仅全局结束/取消使用；普通动作取消不影响其他控制器。
+  void CancelAll(bool completed = false);  // 正常结束保留机构完成停止方式，取消则采用取消方式。
+  bool FireMechanismTrigger();
   bool StartPoint(const route::command& command);
   bool PointPoseReady() const;
   double PointBearingError(const route::command& command) const;
@@ -436,6 +509,9 @@ class autonomous_program {
   drive::corner_controller Cornering;
   drive::rolling_controller Rolling;
   drive::push_controller Pushing;
+  mechanism::scheduler Mechanisms;
+  bool trigger_pending = false;
+  route::command trigger_command{route::action::straight_trigger, 1};
   autonomous_info info;
   bool previously_permitted = false;
   bool waiting_ready = false;

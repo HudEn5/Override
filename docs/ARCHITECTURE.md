@@ -12,7 +12,7 @@
 
 ## 文件职责
 
-`include` 共21个头文件，按功能合并，移除旧文件而不保留转发空壳。相关数学实现留在所属模块，避免每个结构和小配置单独占一个文件；独立控制器按职责分开，不以文件总数限制合理拆分。
+`include` 共23个头文件，按功能合并，移除旧文件而不保留转发空壳。相关数学实现留在所属模块，避免每个结构和小配置单独占一个文件；独立控制器按职责分开，不以文件总数限制合理拆分。
 
 | 文件 | 职责 |
 | --- | --- |
@@ -29,6 +29,8 @@
 | drive-turn.h | 相对转角、绝对航向与角速度规划跟踪 |
 | drive-corner.h | 曲率与轮速预测规划、连续圆角控制器 |
 | drive-rolling.h | 多段连续移动转向、独立rolling_info快照 |
+| mechanism-control.h | 三通道机构适配器、独立超时、输出与取消仲裁 |
+| mechanisms.h | 同事的抬升PID、定时夹爪、目标预设与直接参数动作适配器 |
 | autonomous.h | 路线命令、动作调度和定时前推控制器 |
 | test-control.h | 普通测试的选择、启动、取消和完成锁存 |
 | high-speed-control.h | 高速整定流程与指标 |
@@ -51,7 +53,7 @@ using namespace route;
 RunRoute({DriveStraight(500,540,5000), Wait(200,1000), Turn(90,540,3000), DriveStraight(500,540,5000)});
 ```
 
-每次只启动一个动作，后续周期检查完成后推进；Wait由主循环时钟计时，零毫秒等待可直接推进。
+每次只启动一个底盘动作，后续周期检查完成后推进；机构可独立并行。Wait由主循环时钟计时，零毫秒等待可直接推进。
 完成锁存，启动失败/取消/反馈故障/超时停止全路线，场控禁用立即取消；不创建阻塞路线线程。
 底层 StartDriveStraight/StartTurnRelative/StartTurnToHeading/StartDriveCorner 仍保留供调度器使用。
 自动与比赛实例均采用 performance-config 中的共用预设；菜单A请求一次自动，X进入测试，选择键不直接写电机。
@@ -66,7 +68,9 @@ scripts/test-host.sh 运行 tests 下的控制器、调度和并发测试；mock
 .vscode 是 VEX 工程、代码补全和任务设置；makefile 与 vex/ 是构建规则。
 
 README 面向当前操作；LAB_NOTES 保留真实实验历史，历史参数不代表当前配置。
-当前手臂使用纯电压控制。
+手控手臂保持纯电压控制；自动机构采用双电机平均角度PID，主循环读反馈并更新，不另开写电机线程。首次有效反馈仅建立一次相对零点，反馈失效后不自动重建零点；夹爪DONE仅表示通电时间结束。
+
+直接LiftTo/ClawOpen/ClawClose转换成有类型的机构请求，仍由同一个scheduler处理独立预算、通道互斥、错误和取消；不在autonomous.cpp另造一套机构后台任务。主循环在Autonomous.Update前更新机构反馈/权限，首次闭爪不沿用菜单禁用状态。运行快照同时带抬升和夹爪数据，屏幕线程从原mutex快照显示，未增加头文件/线程或无线打印。
 
 
 ## 本地产物与历史
@@ -95,7 +99,10 @@ chain1移除专用方形接口与控制分支。RunRoute启动rolling命令时�
 规划先从末端向前传播减速/响应距离预算，再向前限制短段加速能力；不重置速度环、不在中间发布零输出或等待停稳。末端保留距离/角度/低速度验收；最后后直线必须大于距离容差，过短报ROLL END DIST。超时按当前直线与随后转向计算，不把多个正常动作总耗时误作单动作超时。连续块完成后DRA步号一次推进对应命令数，DRL以completed_turns/total_turns显示内部进度。Turn/Wait/其他动作是明确停车边界，下一连续块另从当前实际朝向起步。
 
 
-timeout1将timeout_ms作为route::command必填字段和九种工厂的末尾必填参数。RunRoute在命令启动时记录action_started_at，MoveToPoint与stop内部阶段交接不重置；超时通过FinishRoutine统一撤输出。rolling_leg携带每项预算，执行器依据共享直线的after/before边界切换timed_leg，仅切换时钟、不重置PID或停车；全部后续预算在起步前验证，最后一项包含停车验收。已有内部反馈与控制器超时保护保留，显式命令预算为额外上限。
+timeout1最初为九种底盘工厂引入必填timeout_ms，当前扩展为十五种路线工厂，末尾预算全部必填。RunRoute在命令启动时记录action_started_at，MoveToPoint与stop内部阶段交接不重置；超时通过FinishRoutine统一撤输出。rolling_leg携带每项预算，执行器依据共享直线的after/before边界切换timed_leg，仅切换时钟、不重置PID或停车；全部后续预算在起步前验证，最后一项包含停车验收。已有内部反馈与控制器超时保护保留，显式命令预算为额外上限。
 
 
 point3只在MoveToPoint的facing阶段结束时复核最新目标方位；允许max_heading_realignments（默认2）次原地重新对准，再按新距离进入原固定航向直行。计数仅新Point命令启动时归零，action_started_at不重置，超限POINT ALIGN；驱动阶段不返回转向。PointBearingError/PointTurnTolerance共用原坐标和角度预算计算，5mm终态标准保持。
+
+
+通用机构调度在mechanism-control.h，真实抬升/夹爪算法及适配器在mechanisms.h；不增加线程或实现文件。autonomous_program每周期更新机构调度器和当前底盘动作；mechanism::info经原runtime_info mutex整包复制。main在hardware::Apply前合并机构输出，自动退出时只交接停止方式，新手控指令优先；气动状态同步回driver_control，防止模式切换翻转。原DRA动作编号保持，新增机构命令不增加底盘motion枚举或遥测频率。机构Start/Update都推进同一单调时钟，Reset拒绝非法时间；启动请求按值复制，避免清理旧动作时覆盖引用到旧快照的参数。
