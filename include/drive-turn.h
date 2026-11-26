@@ -190,6 +190,7 @@ class turn_controller {
     if ((!info.profiled || info.profile_phase == 4) && requested * info.error_deg >= 0 &&
         std::fabs(requested) < minimum_rpm)
       requested = std::copysign(std::min(minimum_rpm, max_rpm), info.error_deg);
+    const double previous_target = info.target_rpm;
     if (info.profiled) {
       info.target_rpm = motion::LimitVelocity(
           info.target_rpm, requested, config.angular_acceleration_deg_s2 / degrees_per_rpm,
@@ -200,7 +201,10 @@ class turn_controller {
     }
     const double left_target_rpm = info.pivot == pivot_side::left ? 0 : -info.target_rpm;
     const double right_target_rpm = info.pivot == pivot_side::right ? 0 : info.target_rpm;
-    if (!Velocity.Feedforward(left_target_rpm, right_target_rpm, info.left_mV, info.right_mV)) {
+    const double acceleration = (info.target_rpm - previous_target) * 1000 / dt_ms;
+    if (!Velocity.Feedforward(left_target_rpm, right_target_rpm, info.left_mV, info.right_mV,
+                              left_target_rpm == 0 ? 0 : -acceleration,
+                              right_target_rpm == 0 ? 0 : acceleration)) {
       Fail("FF ERROR");
       return;
     }

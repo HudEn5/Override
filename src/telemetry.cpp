@@ -55,7 +55,33 @@ void PrintMotion(unsigned int sequence, const test_info& test) {
 
 // 唯一串口打印线程。锁内只复制状态，所有格式化和外设访问都在锁外完成。
 void DriveTelemetry() {
+  unsigned teach_batch = 0, teach_index = 0;
+  unsigned reported_route = 0;
+  unsigned reported_arm_pulse = 0;
+  vex::timer teach_poll;
   while (true) {
+    if (teach_poll.time(vex::msec) >= 100) {
+      teach_poll.reset();
+      const auto point = ReadTeachPacket();
+      if (point.index && (teach_batch != point.batch || teach_index != point.index)) {
+        printf("DWP,%u,%u,%u,%.1f,%.1f,%.1f\n", point.batch, point.index, point.total,
+               point.point.x_mm, point.point.y_mm, point.point.heading_deg);
+        fflush(stdout);
+        teach_batch = point.batch;
+        teach_index = point.index;
+      }
+      const auto info = ReadRuntimeInfo();
+      const auto& arm = info.arm_tuning;
+      if (info.telemetry && arm.visible && arm.run && arm.run != reported_arm_pulse) {
+        // 时间、试次、脉冲耗时、指令电压、左右电机角度与角速度、状态。
+        printf("DAT,%.1f,%u,%.1f,%d,%.2f,%.2f,%.2f,%.2f,%s\n", arm.time_ms, arm.run,
+               arm.elapsed_ms, info.output.arm_mV, info.lift.left_deg, info.lift.right_deg,
+               arm.left_deg_s, arm.right_deg_s, arm.status);
+        if (info.output.arm_mV == 0)
+          reported_arm_pulse = arm.run;
+        fflush(stdout);
+      }
+    }
     drive::sample value;
     unsigned int dropped = 0;
     if (drive::PopSample(value, dropped)) {
@@ -72,6 +98,26 @@ void DriveTelemetry() {
         const auto& a = info.automatic;
         printf("DRA,%u,%.1f,%u,%u,%d,%d,%d,%d,%d\n", value.sequence, a.time_ms, a.run, a.step,
                static_cast<int>(a.motion), a.active, a.finished, a.waiting, static_cast<int>(a.result));
+        const bool new_terminal = a.finished && a.run != reported_route;
+        const auto& lift = info.lift;
+        const auto& arm = a.mechanisms.channels[static_cast<int>(mechanism::channel::arm)];
+        if (info.local_selection && a.run && arm.claimed &&
+            ((a.active && lift.result == mechanisms::state::running) || new_terminal)) {
+          // 记录同一主循环快照中的左右角度、目标和实际发布的电压指令。
+          printf("DAL,%u,%u,%u,%.1f,%.2f,%.2f,%.2f,%d,%s,%.1f,%.1f\n", value.sequence, a.run, a.step,
+                 lift.elapsed_ms, lift.left_deg, lift.right_deg, lift.target_deg, info.output.arm_mV,
+                 lift.status, lift.reference_deg_s, lift.measured_deg_s);
+        }
+        const auto& claw = a.mechanisms.channels[static_cast<int>(mechanism::channel::claw)];
+        if (info.local_selection && claw.claimed && (a.active || new_terminal)) {
+          printf("DCL,%u,%u,%u,%d,%s\n", value.sequence, a.run, a.step, info.output.claw_mV,
+                 info.claw.status);
+        }
+        if (new_terminal) {
+          // 每轮只在原始日志记一次退出原因，沿用现有 LOG 开关与 DRA 格式。
+          printf("DRE,%u,%u,%u,%d,%s\n", value.sequence, a.run, a.step, static_cast<int>(a.result), a.status);
+          reported_route = a.run;
+        }
         test_info motion;
         const bool moving_route = (info.route_debug || info.autonomous_period) && a.run;
         if (moving_route && a.motion == autonomous_motion::push) {

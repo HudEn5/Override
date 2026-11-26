@@ -44,12 +44,16 @@ int main() {
   Odometry.SetPose(0, 0, 0);  // 已知起点；不清零电机/IMU。首次完整反馈建立传感器基准。
 #if !BARTMOSS_CALIBRATION
   static runtime::startup_mode Selection;
+  static runtime::teach_recorder Teach;
 #endif
   Autonomous.Configure(config::AutoStraightControl(config::StraightControl()),
                        config::AutoTurnControl(config::TurnControl()),
                        config::RouteCornerControl(config::CornerControl()));
   Autonomous.ConfigurePoint(config::PointControl());
   static mechanisms::lift_adapter ArmController;
+  static mechanisms::arm_tuning_test ArmTuning(config::ARM_TUNING_MIN_UP_MV, config::ARM_TUNING_MAX_UP_MV,
+                                              config::ARM_TUNING_DOWN_MV, config::ARM_TUNING_MAX_DEG,
+                                              config::ARM_TUNING_PULSE_MS);
   static mechanisms::claw_adapter ClawController(config::CLAW_CLOSE_DIRECTION);
   Autonomous.BindMechanism(mechanism::channel::arm, ArmController);
   Autonomous.BindMechanism(mechanism::channel::claw, ClawController);
@@ -138,9 +142,11 @@ int main() {
         Competition.isDriverControl(), Competition.isAutonomous(), Controller.installed(), request.stage);
 #endif
     const bool telemetry = Telemetry.Update(input.telemetry, access.telemetry);
+    const bool arm_tuning = config::ARM_TUNING_TEST && config::PROGRAM_MODE == runtime::program_mode::test &&
+                            access.tests;
     drive::SetTelemetryEnabled(telemetry);
     manual::output output =
-        DriverControl.Update(input, access.manual, config::JOYSTICK_DEADBAND,
+        DriverControl.Update(input, access.manual && !arm_tuning, config::JOYSTICK_DEADBAND,
                              config::MANUAL_DRIVE_MAX_VOLTAGE, config::ARM_UP_VOLTAGE,
                              config::ARM_DOWN_VOLTAGE, config::CLAW_VOLTAGE * config::CLAW_CLOSE_DIRECTION);
     drive::BeginCommandUpdate();
@@ -159,16 +165,16 @@ int main() {
 #else
 #if BARTMOSS_HIGH_SPEED
     if (config::HIGH_SPEED_CORNER_TEST) {
-      test_owns_drive = RouteTest.Update(input, output, access.tests, now, frame);
+      test_owns_drive = RouteTest.Update(input, output, access.tests && !arm_tuning, now, frame);
       info.test = RouteTest.Info();
     } else {
-      test_owns_drive = Test.Update(input, output, access.tests, now, frame);
+      test_owns_drive = Test.Update(input, output, access.tests && !arm_tuning, now, frame);
       info.test = Test.Info();
       info.tuning = Test.Metrics();
       info.high_speed_stages = true;
     }
 #else
-    test_owns_drive = Test.Update(input, output, access.tests, now, frame);
+    test_owns_drive = Test.Update(input, output, access.tests && !arm_tuning, now, frame);
     info.test = Test.Info();
 #endif
     if (info.test.visible) {
@@ -182,6 +188,8 @@ int main() {
     info.local_selection = !connected;
     info.local_mode = Selection.Mode();
     info.controls_armed = Selection.Armed();
+    info.teaching = Teach.Update(!connected && access.manual && Selection.Mode() == runtime::local_mode::teach,
+                                 input, Odometry.Info(), now);
     info.auto_ready = auto_ready;
     info.auto_status = auto_status;
     info.initializing = !initialization_ready;
@@ -205,6 +213,7 @@ int main() {
     // 后台机构与底盘共用主循环写入点；取消时仅移交停止方式，不覆盖新的手控指令。
     if (execute_route || route_had_control)
       Autonomous.ApplyMechanisms(output, !execute_route);
+    info.arm_tuning = ArmTuning.Update(arm_tuning, input, mechanism_frame, ArmController.LiftInfo(), now, output);
     if (execute_route)
       DriverControl.SetPistonState(output.toggle_piston);
     route_had_control = execute_route;
@@ -222,9 +231,10 @@ int main() {
       output.left_mV = output.right_mV = 0;
     // 唯一电机写入点；选择测试、完成、取消及场控禁用均保持明确的制动。
     hardware::Apply(output, true,
-                    (connected && !access.manual) || test_owns_drive || execute_route ||
+                    (connected && !access.manual) || test_owns_drive || arm_tuning || execute_route ||
                         (!access.manual && !access.autonomous) ||
-                        inertial == hardware::InertialState::calibrating);
+                        inertial == hardware::InertialState::calibrating,
+                    info.local_selection && info.controls_armed && info.local_mode == runtime::local_mode::teach);
     drive::PublishCommand(output.left_mV, output.right_mV, access.manual || execute_route, true, mode,
                           target_rpm);
     info.pose = Odometry.Info();

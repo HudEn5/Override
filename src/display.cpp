@@ -48,6 +48,9 @@ void ControllerInfoDisplay() {
     const double left = info.lift.left_deg;
     const double right = info.lift.right_deg;
     if (Controller.installed()) {
+      const auto& automatic = info.automatic;
+      const bool route_timed = automatic.finished && automatic.elapsed_ms >= 0;
+      const double route_seconds = automatic.elapsed_ms / 1000.0;
       char lines[3][20];
       snprintf(lines[0], sizeof(lines[0]), "U%+.1f L%.0f R%.0f", info.output.arm_mV / 1000.0, left, right);
       snprintf(lines[1], sizeof(lines[1]), "%s CFG%d ARM%d", Environment(), info.configured,
@@ -56,6 +59,12 @@ void ControllerInfoDisplay() {
                (info.tick / 20) % 10);
       if (info.test.visible)
         TestLines(info.test, info.telemetry, lines);
+      if (info.arm_tuning.visible) {
+        const auto& arm = info.arm_tuning;
+        snprintf(lines[0], sizeof(lines[0]), "ARM %.1fV ANG%.0f", arm.up_mV / 1000.0, info.lift.position_deg());
+        snprintf(lines[1], sizeof(lines[1]), "%s %.1fV", arm.status, info.output.arm_mV / 1000.0);
+        snprintf(lines[2], sizeof(lines[2]), "R1/R2 LOG:%s", info.telemetry ? "ON" : "OFF");
+      }
 #if BARTMOSS_HIGH_SPEED
       if (info.test.visible && info.high_speed_stages) {
         snprintf(lines[0], sizeof(lines[0]), "H%u %+.0f %.0frpm", info.tuning.stage + 1, info.test.request_mm,
@@ -84,19 +93,28 @@ void ControllerInfoDisplay() {
       if (info.local_selection) {
         if (info.local_mode == runtime::local_mode::select) {
           snprintf(lines[0], sizeof(lines[0]), "A:AUTO B:MANUAL");
-          snprintf(lines[1], sizeof(lines[1]), "X:TEST LOG:%s", info.telemetry ? "ON" : "OFF");
+          snprintf(lines[1], sizeof(lines[1]), "X:TEST UP:TEACH");
           snprintf(lines[2], sizeof(lines[2]), "%s",
                    info.auto_ready ? "Release keys/choose" : info.auto_status);
         } else if (!info.controls_armed) {
           snprintf(lines[0], sizeof(lines[0]), "%s SELECTED",
                    info.local_mode == runtime::local_mode::automatic ? "AUTO"
                    : info.local_mode == runtime::local_mode::manual  ? "MANUAL"
+                   : info.local_mode == runtime::local_mode::teach   ? "TEACH"
                                                                      : "TEST");
-          snprintf(lines[1], sizeof(lines[1]), "Release A/B/X");
+          snprintf(lines[1], sizeof(lines[1]), "Release menu keys");
           snprintf(lines[2], sizeof(lines[2]), "Center sticks");
+        } else if (info.local_mode == runtime::local_mode::teach) {
+          snprintf(lines[0], sizeof(lines[0]), "X%.0f Y%.0f mm", info.pose.x_mm, info.pose.y_mm);
+          if (!info.pose.valid)
+            snprintf(lines[0], sizeof(lines[0]), "%s", info.pose.needs_reset ? "POSE RESET:RESTART" : "POSE WAIT");
+          snprintf(lines[1], sizeof(lines[1]), "H%.1f  P%u", info.pose.heading_deg, info.teaching.count);
+          snprintf(lines[2], sizeof(lines[2]), "%s", info.teaching.status);
         } else if (info.local_mode == runtime::local_mode::manual) {
-          snprintf(lines[1], sizeof(lines[1]), "MANUAL %s",
-                   info.automatic.run ? info.automatic.status : "READY");
+          if (route_timed)
+            snprintf(lines[1], sizeof(lines[1]), "%.11s %.2fs", automatic.status, route_seconds);
+          else
+            snprintf(lines[1], sizeof(lines[1]), "MANUAL %s", automatic.run ? automatic.status : "READY");
           snprintf(lines[2], sizeof(lines[2]), "B1s:MENU LOG:%s", info.telemetry ? "ON" : "OFF");
         } else if (info.local_mode == runtime::local_mode::automatic && !info.autonomous_period) {
           snprintf(lines[0], sizeof(lines[0]), "%s", info.auto_status ? info.auto_status : "AUTO WAIT READY");
@@ -105,7 +123,10 @@ void ControllerInfoDisplay() {
       }
       if (info.autonomous_period) {
         snprintf(lines[0], sizeof(lines[0]), "AUTO %s", info.automatic.status);
-        snprintf(lines[1], sizeof(lines[1]), "STEP %u", info.automatic.step);
+        if (route_timed)
+          snprintf(lines[1], sizeof(lines[1]), "STEP %u %.2fs", automatic.step, route_seconds);
+        else
+          snprintf(lines[1], sizeof(lines[1]), "STEP %u", automatic.step);
         snprintf(lines[2], sizeof(lines[2]), "%s LOG:%s",
                  info.automatic.waiting                                ? "WAIT"
                  : info.automatic.motion == autonomous_motion::rolling ? info.automatic.rolling.status
@@ -116,6 +137,8 @@ void ControllerInfoDisplay() {
                  info.telemetry ? "ON" : "OFF");
         if (info.returning_to_manual)
           snprintf(lines[2], sizeof(lines[2]), "MANUAL IN %.1fs", info.return_remaining_ms / 1000);
+      } else if (!info.local_selection && route_timed) {
+        snprintf(lines[1], sizeof(lines[1]), "%.11s %.2fs", automatic.status, route_seconds);
       }
       if (info.initializing) {
         snprintf(lines[0], sizeof(lines[0]), "INITIALIZING");
@@ -154,7 +177,8 @@ void ControllerInfoDisplay() {
                          info.claw.elapsed_ms, info.claw.duration_ms, info.claw.status);
     Brain.Screen.printAt(10, 235, true, "%s %s                                  ", Environment(),
                          info.local_selection && info.local_mode == runtime::local_mode::select
-                             ? "A:AUTO B:MANUAL X:TEST"
+                             ? "A:AUTO B:MANUAL X:TEST UP:TEACH"
+                         : info.local_selection && info.local_mode == runtime::local_mode::teach ? "TEACH"
                          : info.autonomous_period ? info.automatic.status
                          : info.test.visible      ? info.test.status
                                                   : "MANUAL");

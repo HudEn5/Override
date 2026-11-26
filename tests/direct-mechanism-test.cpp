@@ -25,6 +25,9 @@ void autonomous_program::RunRoutine() {
     RunRoute({LiftTo(100, 100)});
   else if (scenario == 4)
     RunRoute({ClawOpen(0, 4.5, 100)});
+  else if (scenario == 6)
+    RunRoute({ClawClose(30, 12, 2, 50), WaitMechanism(channel::claw, 100),
+              Wait(200, 300), ClawOpen(30, 12, 100), WaitMechanism(channel::claw, 100)});
   else
     RunRoute({ClawClose(500, 12, 50), DriveStraight(300, 540, 5000)});
 }
@@ -147,6 +150,16 @@ int main() {
   arm_lost.Tick();
   assert(arm_lost.program.Info().result == route_result::error);
   assert(arm_lost.program.Info().left_mV == 0 && arm_lost.applied.arm_mV == 0);
+  // 机构故障撤掉正在直行的底盘；本地自动回手动前仍有多个使能周期。
+  const char* first_fault = arm_lost.program.Info().status;
+  const auto fault_step = arm_lost.program.Info().step;
+  for (int tick = 0; tick < 300; ++tick) {
+    arm_lost.Tick();
+    const auto& end = arm_lost.program.Info();
+    assert(end.finished && !end.active && end.result == route_result::error);
+    assert(end.step == fault_step && std::strcmp(end.status, first_fault) == 0);
+    assert(end.left_mV == 0 && end.right_mV == 0 && arm_lost.applied.arm_mV == 0);
+  }
 
   robot stale;
   while (!stale.overlap && stale.now < 2000)
@@ -188,6 +201,27 @@ int main() {
   claw_timeout.Run();
   assert(claw_timeout.program.Info().result == route_result::error && claw_timeout.now == 60);
   assert(claw_timeout.applied.claw_mV == 0 && claw_timeout.program.Info().left_mV == 0);
+  scenario = 6;
+  robot grip;
+  for (int i = 0; i < 24; ++i) {
+    grip.Tick();
+    const int expected = grip.now < 40 ? 12000 : grip.now < 240 ? 2000 : -12000;
+    assert(grip.applied.claw_mV == expected);
+  }
+  grip.Run();
+  assert(grip.program.Info().result == route_result::done && grip.applied.claw_mV == 0);
+  robot grip_offline;
+  for (int i = 0; i < 5; ++i)
+    grip_offline.Tick();
+  assert(grip_offline.applied.claw_mV == 2000);
+  grip_offline.claw_online = false;
+  grip_offline.Tick();
+  assert(grip_offline.program.Info().result == route_result::error && grip_offline.applied.claw_mV == 0);
+  robot grip_cancel;
+  for (int i = 0; i < 5; ++i)
+    grip_cancel.Tick();
+  grip_cancel.Tick(false);
+  assert(grip_cancel.program.Info().result == route_result::cancelled && grip_cancel.applied.claw_mV == 0);
 #endif
   std::puts(
       "Direct mechanisms passed: first-cycle close, imported sequence, overlap/join, limits, deadlines, "

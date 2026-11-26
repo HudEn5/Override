@@ -108,6 +108,31 @@ inline drive::turn_config AutoTurnControl(const drive::turn_config& baseline) {
   result.settle_ms = AUTO_SETTLE_MS;
   return result;
 }
+// 五次放料路线的试车档。kA 按 kV × 响应时间估算，实际载荷下仍需标定。
+// 只在显式选择 sprint 的普通直行和原地转向中启用。
+inline drive::straight_config SprintStraightControl(drive::straight_config cfg) {
+  cfg.motion.acceleration_rpm_s = 1400;
+  cfg.motion.deceleration_rpm_s = 1150;
+  cfg.motion.braking_delay_ms = 35;
+  cfg.motion.position_kP = 2.0;
+  cfg.pid.kP = 18;
+  cfg.heading.kP = 750;
+  cfg.heading.kD = 10;
+  cfg.heading.max_correction_mV = 1500;
+  for (auto* ff : {&cfg.left_forward, &cfg.right_forward, &cfg.left_reverse, &cfg.right_reverse})
+    ff->kA = ff->kV * .11;
+  return cfg;
+}
+inline drive::turn_config SprintTurnControl(drive::turn_config cfg) {
+  cfg.angular_acceleration_deg_s2 = 2100;
+  cfg.angular_deceleration_deg_s2 = 1800;
+  cfg.profile_braking_delay_ms = 45;
+  cfg.profile_finish_kP = 10;
+  cfg.kD = .55;
+  for (auto* ff : {&cfg.left_forward, &cfg.right_forward, &cfg.left_reverse, &cfg.right_reverse})
+    ff->kA = ff->kV * .085;
+  return cfg;
+}
 // 单侧Swing独立整定：加强追赶与角速度阻尼，不提高末端最低轮速。
 constexpr double SWING_POSITION_FEEDBACK_SCALE = 4.0;
 constexpr double SWING_RATE_DAMPING = 1.4;

@@ -17,3 +17,10 @@ runtime_info ReadRuntimeInfo() {
   snapshot_mutex.unlock();
   return value;
 }
+
+runtime::teach_packet ReadTeachPacket() {
+  snapshot_mutex.lock();
+  const auto packet = latest.teaching.packet;
+  snapshot_mutex.unlock();
+  return packet;
+}

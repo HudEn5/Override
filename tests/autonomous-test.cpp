@@ -51,8 +51,10 @@ int main() {
   f.inertial_ready = false;
   p.Update(true, f, 0);
   assert(p.Info().active && p.Info().step == 0 && std::strcmp(p.Info().status, "WAIT READY") == 0);
+  assert(p.Info().elapsed_ms < 0);
   f.inertial_ready = true;
   double left = 0, right = 0;
+  const double first_action_ms = 10;
   for (int tick = 1; tick < 2000 && !p.Info().finished; ++tick) {
     const auto last = p.Info().drive;
     const auto rpm = [](int mV) { return std::abs(mV) < 400 ? 0 : (mV - (mV > 0 ? 400.0 : -400.0)) / 16; };
@@ -69,18 +71,23 @@ int main() {
   }
   assert(p.Info().finished && p.Info().step == 2 && std::strcmp(p.Info().status, "DONE") == 0);
   assert(p.Info().drive.left_mV == 0 && p.Info().drive.right_mV == 0);
+  const double elapsed = p.Info().elapsed_ms;
+  assert(elapsed > 0 && elapsed == p.Info().time_ms - first_action_ms);
   const unsigned int run = p.Info().run;
   for (int i = 0; i < 100; ++i)
     p.Update(true, f, 30000 + i * 10);
   assert(p.Info().run == run && !p.Info().active);  // 同一自动时段仅执行一次。
   p.Update(false, f, 40000);
+  assert(p.Info().elapsed_ms == elapsed);  // 禁用及切回手动后保留已完成路线的耗时。
   f = Frame();
   f.velocity.sequence = 10000;
   f.velocity.time_ms = 40010;
   p.Update(true, f, 40010);
   assert(p.Info().active && p.Info().run == run + 1);
+  assert(p.Info().elapsed_ms < 0);
   p.Update(false, f, 40020);
   assert(!p.Info().active && p.Info().drive.left_mV == 0 && p.Info().drive.right_mV == 0);
+  assert(p.Info().elapsed_ms == 10 && p.Info().result == route_result::cancelled);
   std::puts(
       "Autonomous checks passed: ready wait, shared straight sequence, once-per-period and disable "
       "cancellation.");

@@ -14,7 +14,8 @@ drive::feedforward_config Model(double ks, double kv) {
   f.calibrated = true;
   return f;
 }
-result Sim(bool experimental, int direction, double la, double ra, double drag, double distance) {
+result Sim(bool experimental, int direction, double la, double ra, double drag, double distance,
+           bool sprint = false) {
   drive::straight_config base;
   base.motion.wheel_diameter_mm = 69.85;
   base.motion.motor_revs_per_wheel_rev = 1.2;
@@ -22,7 +23,9 @@ result Sim(bool experimental, int direction, double la, double ra, double drag, 
   base.right_forward = Model(408.162564, 16.537990);
   base.left_reverse = Model(547.829766, 16.939618);
   base.right_reverse = Model(537.033135, 15.870378);
-  const auto cfg = experimental ? config::RouteStraightControl(base) : config::HighSpeedStraightControl(base);
+  auto cfg = experimental ? config::RouteStraightControl(base) : config::HighSpeedStraightControl(base);
+  if (sprint)
+    cfg = config::SprintStraightControl(cfg);
   drive::straight_controller c;
   c.Configure(cfg);
   drive::straight_feedback f;
@@ -67,6 +70,15 @@ result Sim(bool experimental, int direction, double la, double ra, double drag, 
   return out;
 }
 int main() {
+  // 在相同停车判据下比较正反向短行程，覆盖试车档的加速前馈和制动。
+  for (const int direction : {-1, 1}) {
+    for (const double distance : {65., 600.}) {
+      const auto baseline = Sim(true, direction, .18, .18, 80, distance);
+      const auto sprint = Sim(true, direction, .18, .18, 80, distance, true);
+      assert(baseline.done && sprint.done && sprint.elapsed < baseline.elapsed);
+      assert(std::fabs(sprint.remaining) <= 5);
+    }
+  }
   drive::turn_config turn;
   turn.acceleration_rpm_s = 360;
   const auto legacy_turn = config::RouteTurnControl(turn, false);

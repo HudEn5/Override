@@ -56,6 +56,20 @@ struct fixture {
 };
 
 int main() {
+  // 两侧独立加速/刹车，瞬态可削顶；不可达的匀速不能被反向加速度掩盖。
+  drive::velocity_control wheels;
+  auto ff = Model();
+  ff.kA = 2;
+  wheels.ConfigureForward(ff, ff);
+  wheels.ConfigureReverse(ff, ff);
+  int left = 0, right = 0;
+  assert(wheels.Feedforward(100, -100, left, right, 100, -100));
+  assert(left == 2200 && right == -2200);
+  assert(wheels.Feedforward(500, -500, left, right, 2400, -2400));
+  assert(left == 12000 && right == -12000);
+  assert(!wheels.Feedforward(100, 750, left, right, 0, -1000));
+  assert(left == 12000 && right == -12000);
+  assert(wheels.Feedforward(0, 0, left, right) && left == 0 && right == 0);
   drive::velocity_pid pid;
   drive::velocity_pid_config config;
   config.kP = 6;

@@ -4,7 +4,7 @@
 #include <cmath>
 #include "mechanism-control.h"
 
-// 移植自同事 b70b202 的抬升/夹爪算法，仅计算输出；电机由 main 统一写入。
+// 手臂与夹爪在这里计算输出，电机由 main 统一写入。
 namespace mechanisms {
 enum class state { idle, running, done, cancelled, error };
 struct feedback {
@@ -19,6 +19,7 @@ struct lift_info {
   bool homed = false;
   double left_deg = 0, right_deg = 0, target_deg = 0;
   double elapsed_ms = 0;
+  double reference_deg_s = 0, measured_deg_s = 0;
   double control_dt_ms = 0, requested_height_mm = 0;
   bool height_requested = false, height_mapped = false;
   int left_mV = 0, right_mV = 0;
@@ -27,38 +28,93 @@ struct lift_info {
   }
 };
 
-class lift_pid {
- public:
-  void reset() {
-    integral = previous_error = 0;
-  }
-  template <typename Config>
-  double update(double error, double rate, double dt_ms, const Config& c, bool integrate) {
-    if (error * previous_error < 0 || c.kI == 0)
-      integral = 0;
-    if (error != 0)
-      previous_error = error;
-    const double base = c.kP * error - c.kD * rate;
-    if (integrate && dt_ms > 0) {
-      const double next = std::max(-c.maximum_integral_mV,
-                                   std::min(c.maximum_integral_mV, integral + c.kI * error * dt_ms / 1000.0));
-      const double raw = base + next;
-      if ((raw >= -c.maximum_down_mV && raw <= c.maximum_up_mV) || (raw > c.maximum_up_mV && error < 0) ||
-          (raw < -c.maximum_down_mV && error > 0))
-        integral = next;
-    }
-    return base + integral;
-  }
-
- private:
-  double integral = 0, previous_error = 0;
-};
-
 struct claw_info {
   state result = state::idle;
   const char* status = "READY";
   double duration_ms = 0, elapsed_ms = 0;
-  int millivolts = 0;  // 正值闭合，负值张开；终态始终为 0。
+  int millivolts = 0;  // 正值闭合或夹持，负值张开。
+};
+
+struct arm_tuning_info {
+  bool visible = false;
+  unsigned run = 0;
+  int up_mV = 4000, down_mV = 2500;
+  double time_ms = 0, elapsed_ms = 0, left_deg_s = 0, right_deg_s = 0;
+  const char* status = "READY";
+};
+
+// R1/R2 点动测定电压响应。松键、超时和行程限制都撤压并等待按键释放。
+class arm_tuning_test {
+ public:
+  arm_tuning_test(int minimum_up, int maximum_up, int down, double maximum_deg, double pulse_ms)
+      : minimum_up_mV(minimum_up), maximum_up_mV(maximum_up), upper_deg(maximum_deg), duration_ms(pulse_ms) {
+    info.up_mV = minimum_up;
+    info.down_mV = down;
+  }
+  const arm_tuning_info& Update(bool enabled, const manual::input& input, const feedback& frame,
+                                const lift_info& lift, double now, manual::output& output) {
+    info.visible = enabled;
+    if (!enabled) {
+      direction = 0;
+      released = false;
+      info.status = "READY";
+      return info;
+    }
+    output.arm_enabled = true;
+    output.arm_mV = 0;
+    output.arm_stop = manual::stopping::hold;
+    info.time_ms = now;
+    info.left_deg_s = frame.left_deg_s;
+    info.right_deg_s = frame.right_deg_s;
+    const int requested = static_cast<int>(input.arm_up) - static_cast<int>(input.arm_down);
+    const int step = static_cast<int>(input.test_next && !last_up) -
+                     static_cast<int>(input.test_previous && !last_down);
+    last_up = input.test_next;
+    last_down = input.test_previous;
+    if (input.test_cancel || !frame.arm_online || !frame.arm_valid || !lift.homed) {
+      released = false;
+      return Stop(input.test_cancel ? "STOP" : "ARM NOT READY");
+    }
+    if (direction == 0) {
+      if (!input.arm_up && !input.arm_down) {
+        released = true;
+        info.up_mV = std::max(minimum_up_mV, std::min(maximum_up_mV, info.up_mV + 1000 * step));
+        return info;
+      }
+      if (requested == 0 || !released)
+        return info;
+      direction = requested;
+      released = false;
+      started_ms = now;
+      ++info.run;
+    }
+    info.elapsed_ms = now - started_ms;
+    if (requested != direction)
+      return Stop("RELEASE");
+    if (!std::isfinite(info.elapsed_ms) || info.elapsed_ms < 0 || info.elapsed_ms >= duration_ms)
+      return Stop("PULSE END");
+    if ((direction > 0 && std::max(lift.left_deg, lift.right_deg) >= upper_deg) ||
+        (direction < 0 && std::min(lift.left_deg, lift.right_deg) <= 0.0))
+      return Stop("ANGLE LIMIT");
+    if (std::fabs(lift.left_deg - lift.right_deg) > 12)
+      return Stop("ARM MISMATCH");
+    output.arm_mV = direction > 0 ? info.up_mV : -info.down_mV;
+    info.status = "RUN";
+    return info;
+  }
+
+ private:
+  const arm_tuning_info& Stop(const char* status) {
+    direction = 0;
+    info.status = status;
+    return info;
+  }
+  arm_tuning_info info;
+  const int minimum_up_mV, maximum_up_mV;
+  const double upper_deg, duration_ms;
+  double started_ms = 0;
+  int direction = 0;
+  bool released = false, last_up = false, last_down = false;
 };
 
 // 自动路线使用的具名动作编号；角度相对于启动时的机械起点，不是关节角或毫米。
@@ -81,20 +137,28 @@ struct height_calibration {
 struct lift_config {
   // 两台电机通过同一根轴：使用相对零点的平均输出轴角度，不是高度或关节角度。
   double minimum_deg = 0, maximum_deg = 600;
-  double kP = 100, kI = 20, kD = 8;
-  double maximum_integral_mV = 2000;  // 积分限幅，饱和时停止同向累积；无重力补偿。
-  int maximum_up_mV = 12000, maximum_down_mV = 2500;
+  // 5 V 带 Pin 能通过全行程；下降实测 -2.5 V 过快，使用较低的前馈和目标速度。
+  int up_cruise_mV = 5000, up_approach_mV = 5000;
+  double up_support_zone_deg = 6;  // 距目标这么近时，上升电压至少给末段前馈值。
+  int up_stall_assist_mV = 1000;  // 上升末段两侧停滞时的最大补力，仍受上升电压上限约束。
+  int down_cruise_mV = 1400, down_approach_mV = 650;
+  int maximum_up_mV = 6000, maximum_down_mV = 2500;
+  double max_up_deg_s = 80, max_down_deg_s = 60;
+  double approach_deg = 18, velocity_kP = 29, rate_filter_ms = 35;
   double tolerance_deg = 2, stopped_deg_s = 8, settle_ms = 200;
+  double down_to_height_settle_ms = 120;  // 降到非零放料高度时的稳定确认时间。
+  // 进内层窗口后由电机 hold 接管，留时间吸收皮筋回弹。
+  double hold_capture_deg = 1, hold_recheck_ms = 240;
+  double hold_drift_deg = 1;  // 停稳窗口内每侧编码器允许的位移。
   double maximum_gap_ms = 100;
-  double stall_ms = 600, stall_progress_deg = 1;
-  int stall_voltage_mV = 1500;
-  // 上升起步仅助推一次；任一侧上移 1 度或满 100ms 后回到原闭环上限。
-  int start_up_mV = 12000;
-  double start_up_ms = 100, start_progress_deg = 1;
+  double sensor_grace_ms = 100;  // 升降中读数异常时先保持，允许短暂恢复。
+  double assist_delay_ms = 120, assist_ramp_ms = 100, assist_progress_deg = 1;
+  int assist_minimum_mV = 1500;
   height_calibration height;
 };
 struct claw_config {
   int voltage_mV = 6000;
+  int hold_mV = 0;
   double maximum_duration_ms = 5000, maximum_gap_ms = 100;
 };
 class lift_controller {
@@ -125,19 +189,24 @@ class lift_controller {
         std::isfinite(time_ms) && time_ms >= 0 && (!have_frame || (gap >= 0 && gap <= config.maximum_gap_ms));
     now = time_ms;
     have_frame = true;
-    if (!clock_valid || !valid_feedback()) {
+    if (!clock_valid || !data.arm_online) {
       if (value.homed || busy())
-        fail(!clock_valid ? "CLOCK/STALE" : !data.arm_online ? "MOTOR OFF" : "FEEDBACK");
+        fail(!clock_valid ? "CLOCK/STALE" : "MOTOR OFF");
       value.homed = false;
       return;
     }
+    if (!valid_feedback()) {
+      if (!allowed)
+        cancel();
+      else if (busy())
+        pause_for_sensor();
+      return;
+    }
+    if (sensor_bad_since >= 0)
+      value.measured_deg_s = 0.5 * data.left_deg_s + 0.5 * data.right_deg_s;
+    sensor_bad_since = -1;
     value.left_deg = data.left_deg - zero_left;
     value.right_deg = data.right_deg - zero_right;
-    if (!std::isfinite(value.left_deg) || !std::isfinite(value.right_deg)) {
-      fail("FEEDBACK");
-      value.homed = false;
-      return;
-    }
     if (!allowed) {
       cancel();
       return;
@@ -158,7 +227,6 @@ class lift_controller {
     value = lift_info();
     value.homed = true;
     value.status = "ZEROED";
-    pid.reset();
     return true;
   }
 
@@ -171,26 +239,27 @@ class lift_controller {
       return fail("CONFIG");
     if (!std::isfinite(timeout_ms) || timeout_ms <= 0)
       return fail("TIMEOUT CONFIG");
-    if (!ready())
-      return fail("DISABLED/FEEDBACK");
+    if (!allowed)
+      return fail("DISABLED");
+    if (!have_frame || !clock_valid || !valid_feedback())
+      return fail("ARM SENSOR");
     if (!value.homed)
       return fail("NO ZERO");
     if (!std::isfinite(target_deg) || target_deg < config.minimum_deg || target_deg > config.maximum_deg)
       return fail("TARGET LIMIT");
+    raising = target_deg != 0 && target_deg > value.position_deg();
+    settle_duration = target_deg > 0 && target_deg < value.position_deg() ? config.down_to_height_settle_ms
+                                                                        : config.settle_ms;
     value.target_deg = target_deg;
     value.result = state::running;
     value.status = "MOVING";
-    started = pid_time = now;
-    pid.reset();
+    started = previous_update = now;
+    sensor_bad_since = -1;
     timeout = timeout_ms;
     settle_started = -1;
-    progress_time = now;
-    progress_left = value.left_deg;
-    progress_right = value.right_deg;
-    start_left = value.left_deg;
-    start_right = value.right_deg;
-    startup_active = config.start_up_mV > 0 && config.start_up_ms > 0 && stopped() &&
-                     target_deg - value.position_deg() > config.tolerance_deg;
+    hold_started = -1;
+    last_progress_ms = -1;
+    value.measured_deg_s = 0.5 * data.left_deg_s + 0.5 * data.right_deg_s;
     update();
     return value.result != state::error;
   }
@@ -226,8 +295,6 @@ class lift_controller {
     return accepted;
   }
   void cancel() {
-    startup_active = false;
-    pid.reset();
     if (busy()) {
       value.result = state::cancelled;
       value.status = "CANCEL";
@@ -242,55 +309,102 @@ class lift_controller {
   bool valid_config() const {
     const double numbers[] = {config.minimum_deg,
                               config.maximum_deg,
-                              config.kP,
-                              config.kI,
-                              config.kD,
-                              config.maximum_integral_mV,
+                              config.max_up_deg_s,
+                              config.max_down_deg_s,
+                              config.approach_deg,
+                              config.up_support_zone_deg,
+                              config.velocity_kP,
+                              config.rate_filter_ms,
                               config.tolerance_deg,
                               config.stopped_deg_s,
                               config.settle_ms,
+                              config.down_to_height_settle_ms,
+                              config.hold_capture_deg,
+                              config.hold_recheck_ms,
+                              config.hold_drift_deg,
                               config.maximum_gap_ms,
-                              config.stall_ms,
-                              config.stall_progress_deg,
-                              config.start_up_ms,
-                              config.start_progress_deg};
+                              config.sensor_grace_ms,
+                              config.assist_delay_ms,
+                              config.assist_ramp_ms,
+                              config.assist_progress_deg};
     for (double n : numbers)
       if (!std::isfinite(n))
         return false;
-    return config.minimum_deg <= 0 && config.maximum_deg > 0 && config.kP > 0 && config.kI >= 0 &&
-           config.kD >= 0 && config.maximum_integral_mV >= 0 && config.maximum_integral_mV <= 12000 &&
+    return config.minimum_deg <= 0 && config.maximum_deg > 0 &&
+           config.max_up_deg_s > 0 && config.max_down_deg_s > 0 && config.approach_deg > 0 &&
+           config.velocity_kP > 0 && config.rate_filter_ms > 0 &&
            config.maximum_up_mV > 0 && config.maximum_up_mV <= 12000 && config.maximum_down_mV > 0 &&
            config.maximum_down_mV <= 12000 && config.tolerance_deg > 0 && config.stopped_deg_s > 0 &&
-           config.settle_ms >= 0 && config.maximum_gap_ms > 0 && config.stall_ms > 0 &&
-           config.stall_progress_deg > 0 && config.stall_voltage_mV > 0 && config.stall_voltage_mV <= 12000 &&
-           config.start_up_mV >= 0 && config.start_up_mV <= 12000 && config.start_up_ms >= 0 &&
-           config.start_up_ms <= 500 && config.start_progress_deg > 0;
+           config.up_approach_mV >= 0 && config.up_approach_mV <= config.up_cruise_mV &&
+           config.up_cruise_mV <= config.maximum_up_mV && config.up_support_zone_deg > 0 &&
+           config.up_stall_assist_mV >= 0 && config.up_stall_assist_mV <= config.maximum_up_mV &&
+           config.down_approach_mV >= 0 &&
+           config.down_approach_mV <= config.down_cruise_mV && config.down_cruise_mV <= config.maximum_down_mV &&
+           config.hold_capture_deg > 0 && config.hold_capture_deg <= config.tolerance_deg &&
+           config.hold_recheck_ms > 0 && config.hold_drift_deg > 0 &&
+           config.settle_ms >= 0 && config.down_to_height_settle_ms >= 0 &&
+           config.maximum_gap_ms > 0 && config.sensor_grace_ms >= 0 &&
+           config.assist_delay_ms >= 0 && config.assist_ramp_ms > 0 && config.assist_progress_deg > 0 &&
+           config.assist_minimum_mV > 0 && config.assist_minimum_mV <= 12000;
   }
   bool valid_feedback() const {
-    return data.arm_online && data.arm_valid && std::isfinite(data.left_deg) &&
-           std::isfinite(data.right_deg) && std::isfinite(data.left_deg_s) &&
+    return data.arm_online && data.arm_valid && std::isfinite(data.left_deg - zero_left) &&
+           std::isfinite(data.right_deg - zero_right) && std::isfinite(data.left_deg_s) &&
            std::isfinite(data.right_deg_s) && std::fabs(data.left_deg_s) <= 720 &&
            std::fabs(data.right_deg_s) <= 720;
-  }
-  bool ready() const {
-    return have_frame && clock_valid && allowed && std::isfinite(now) && valid_feedback();
   }
   bool stopped() const {
     return std::fabs(data.left_deg_s) <= config.stopped_deg_s &&
            std::fabs(data.right_deg_s) <= config.stopped_deg_s;
   }
-  int voltage(double raw, int up_limit_mV) const {
+  void pause_for_sensor() {
+    if (sensor_bad_since < 0)
+      sensor_bad_since = now;
+    value.elapsed_ms = now - started;
+    value.left_mV = value.right_mV = 0;
+    value.reference_deg_s = 0;
+    value.status = "ARM WAIT";
+    last_progress_ms = -1;
+    settle_started = -1;
+    previous_update = now;
+    if (value.elapsed_ms >= timeout)
+      fail("TIMEOUT");
+    else if (now - sensor_bad_since >= config.sensor_grace_ms)
+      fail("ARM SENSOR");
+  }
+  int voltage(double raw) const {
     raw = std::max(-static_cast<double>(config.maximum_down_mV),
-                   std::min(static_cast<double>(up_limit_mV), raw));
+                   std::min(static_cast<double>(config.maximum_up_mV), raw));
     // 共轴两台必须始终同电压；任一编码器触及方向边界，两台一起停止。
     if ((raw < 0 && (value.left_deg <= config.minimum_deg || value.right_deg <= config.minimum_deg)) ||
         (raw > 0 && (value.left_deg >= config.maximum_deg || value.right_deg >= config.maximum_deg)))
       return 0;
     return static_cast<int>(raw);
   }
+  void apply_upward_assist(double remaining_deg) {
+    if (value.left_mV < config.assist_minimum_mV) {
+      last_progress_ms = -1;
+      return;
+    }
+    // 两侧有任一侧继续上升就重新计时。经过一段停滞后才渐进补力。
+    const bool start_tracking = last_progress_ms < 0;
+    const double positions[] = {value.left_deg, value.right_deg};
+    for (int side = 0; side < 2; ++side) {
+      if (start_tracking || positions[side] - progress_deg[side] >= config.assist_progress_deg) {
+        progress_deg[side] = positions[side];
+        last_progress_ms = now;
+      }
+    }
+    if (value.reference_deg_s > 0 && remaining_deg <= config.approach_deg + config.hold_capture_deg &&
+        (raising || stopped())) {
+      const double ramp = (now - last_progress_ms - config.assist_delay_ms) / config.assist_ramp_ms;
+      const double assist = std::min(1.0, std::max(0.0, ramp));
+      value.left_mV = value.right_mV = voltage(value.left_mV + config.up_stall_assist_mV * assist);
+    }
+  }
   void update() {
-    const double dt = now - pid_time;
-    pid_time = now;
+    const double dt = now - previous_update;
+    previous_update = now;
     value.elapsed_ms = now - started;
     if (value.elapsed_ms > timeout) {
       fail("TIMEOUT");
@@ -304,56 +418,60 @@ class lift_controller {
       return;
     }
     const double error = value.target_deg - value.position_deg();
-    if (startup_active &&
-        (value.elapsed_ms >= config.start_up_ms || value.left_deg - start_left >= config.start_progress_deg ||
-         value.right_deg - start_right >= config.start_progress_deg || error <= config.tolerance_deg))
-      startup_active = false;
-    if (std::fabs(error) <= config.tolerance_deg && stopped()) {
-      if (settle_started < 0)
-        settle_started = now;
+    const double rate = 0.5 * data.left_deg_s + 0.5 * data.right_deg_s;
+    value.measured_deg_s += (rate - value.measured_deg_s) * dt / (config.rate_filter_ms + dt);
+    const double remaining_deg = std::fabs(error);
+    const bool in_window = remaining_deg <= config.tolerance_deg;
+    // 从下方逼近时进入内窗口再保持；已越过目标但仍在到位范围内也可保持。
+    const bool capture = raising ? in_window && error <= config.hold_capture_deg
+                                 : remaining_deg <= config.hold_capture_deg ||
+                                       (in_window && (value.target_deg == 0 || stopped()));
+    const bool dropped = raising && error > config.tolerance_deg;
+    value.reference_deg_s = 0;
+    if (hold_started < 0 && capture)
+      hold_started = now;
+    if (hold_started >= 0 && (in_window || (!dropped && now - hold_started < config.hold_recheck_ms))) {
       value.left_mV = value.right_mV = 0;
-      value.status = "SETTLING";
-      pid.reset();
-      if (now - settle_started >= config.settle_ms) {
+      value.status = in_window ? "SETTLING" : "HOLDING";
+      if (!in_window) {
+        settle_started = -1;
+      } else if (settle_started < 0 ||
+                 std::fabs(value.left_deg - settle_left_deg) > config.hold_drift_deg ||
+                 std::fabs(value.right_deg - settle_right_deg) > config.hold_drift_deg) {
+        // 用两侧角度的变化判断停稳，避免瞬时速度跳动打断等待。
+        settle_started = now;
+        settle_left_deg = value.left_deg;
+        settle_right_deg = value.right_deg;
+      }
+      if (in_window && now - settle_started >= settle_duration) {
         value.result = state::done;
         value.status = "DONE";
       }
     } else {
+      hold_started = -1;
       settle_started = -1;
       value.status = "MOVING";
-      const double rate = 0.5 * data.left_deg_s + 0.5 * data.right_deg_s;
-      const bool integrate =
-          error > 0 ? value.left_deg < config.maximum_deg && value.right_deg < config.maximum_deg
-                    : value.left_deg > config.minimum_deg && value.right_deg > config.minimum_deg;
-      const double raw = startup_active ? config.start_up_mV : pid.update(error, rate, dt, config, integrate);
+      const double fraction = std::min(1.0, (remaining_deg - config.hold_capture_deg) / config.approach_deg);
+      const bool up = error > 0;
+      const int near_mV = up ? config.up_approach_mV : config.down_approach_mV;
+      const int cruise_mV = up ? config.up_cruise_mV : config.down_cruise_mV;
+      const double feedforward = std::copysign(near_mV + (cruise_mV - near_mV) * fraction, error);
+      value.reference_deg_s = std::copysign((up ? config.max_up_deg_s : config.max_down_deg_s) * fraction, error);
+      const double raw = feedforward + config.velocity_kP * (value.reference_deg_s - value.measured_deg_s);
       if (!std::isfinite(raw)) {
         fail("CONTROL");
         return;
       }
-      const int up_limit = startup_active ? config.start_up_mV : config.maximum_up_mV;
-      if (startup_active)
-        value.status = "STARTUP";
-      value.left_mV = value.right_mV = voltage(raw, up_limit);
+      const bool needs_up_support = raising && up && remaining_deg <= config.up_support_zone_deg;
+      const double supported = needs_up_support ? std::max(raw, static_cast<double>(config.up_approach_mV)) : raw;
+      value.left_mV = value.right_mV = voltage(supported);
     }
-    if (now - progress_time >= config.stall_ms) {
-      if ((std::abs(value.left_mV) >= config.stall_voltage_mV &&
-           std::fabs(value.left_deg - progress_left) < config.stall_progress_deg) ||
-          (std::abs(value.right_mV) >= config.stall_voltage_mV &&
-           std::fabs(value.right_deg - progress_right) < config.stall_progress_deg)) {
-        fail("STALL");
-        return;
-      }
-      progress_time = now;
-      progress_left = value.left_deg;
-      progress_right = value.right_deg;
-    }
+    apply_upward_assist(remaining_deg);
     // 截止时刻已满足到位/停稳可DONE，仍在运行则与调度器一致立即撤压。
     if (busy() && value.elapsed_ms >= timeout)
       fail("TIMEOUT");
   }
   bool fail(const char* reason) {
-    startup_active = false;
-    pid.reset();
     value.result = state::error;
     value.status = reason;
     value.left_mV = value.right_mV = 0;
@@ -362,11 +480,12 @@ class lift_controller {
   lift_config config;
   lift_info value;
   feedback data;
-  lift_pid pid;
-  bool have_frame = false, allowed = false, clock_valid = false, startup_active = false;
+  bool have_frame = false, allowed = false, clock_valid = false, raising = false;
   double now = 0, zero_left = 0, zero_right = 0, started = 0, timeout = 0, settle_started = -1;
-  double progress_time = 0, progress_left = 0, progress_right = 0;
-  double start_left = 0, start_right = 0, pid_time = 0;
+  double settle_left_deg = 0, settle_right_deg = 0, settle_duration = 0;
+  double last_progress_ms = -1;
+  double progress_deg[2] = {};
+  double previous_update = 0, hold_started = -1, sensor_bad_since = -1;
 };
 
 // 夹爪与抬升调试放在同一文件；此处只计算输出，由主循环统一写电机。
@@ -395,7 +514,7 @@ class claw_controller {
         std::isfinite(time_ms) && time_ms >= 0 && (!have_frame || (gap >= 0 && gap <= config.maximum_gap_ms));
     now = time_ms;
     have_frame = true;
-    if (busy() && (!clock_valid || !online)) {
+    if ((busy() || value.millivolts != 0) && (!clock_valid || !online)) {
       fail(!clock_valid ? "CLOCK/STALE" : "MOTOR OFF");
       return;
     }
@@ -424,7 +543,8 @@ class claw_controller {
 
  private:
   bool valid_config() const {
-    return config.voltage_mV > 0 && config.voltage_mV <= 12000 && std::isfinite(config.maximum_duration_ms) &&
+    return config.voltage_mV > 0 && config.voltage_mV <= 12000 && config.hold_mV >= 0 &&
+           config.hold_mV <= config.voltage_mV && std::isfinite(config.maximum_duration_ms) &&
            config.maximum_duration_ms > 0 && std::isfinite(config.maximum_gap_ms) &&
            config.maximum_gap_ms > 0;
   }
@@ -458,8 +578,8 @@ class claw_controller {
     }
     if (value.elapsed_ms >= value.duration_ms) {
       value.result = state::done;
-      value.status = "DONE";
-      value.millivolts = 0;
+      value.millivolts = direction > 0 ? config.hold_mV : 0;
+      value.status = value.millivolts != 0 ? "GRIP" : "DONE";
       return;
     }
     value.millivolts = direction * config.voltage_mV;
@@ -589,7 +709,8 @@ class claw_adapter : public mechanism::controller {
       return Start(action.preset, timeout_ms, now);
     Update(now);
     if ((direction != 1 && direction != -1) || !std::isfinite(action.volts) || action.volts <= 0 ||
-        action.volts > 12) {
+        action.volts > 12 || !std::isfinite(action.hold_volts) || action.hold_volts < 0 ||
+        action.hold_volts > action.volts) {
       control.reject("CLAW VOLTAGE/DIR");
       return false;
     }
@@ -601,6 +722,7 @@ class claw_adapter : public mechanism::controller {
       return false;
     claw_config settings;
     settings.voltage_mV = static_cast<int>(std::round(action.volts * 1000));
+    settings.hold_mV = static_cast<int>(std::round(action.hold_volts * 1000));
     control.configure(settings);
     return action.kind == mechanism::operation::claw_open ? control.ClawOpen(action.target, timeout_ms)
                                                           : control.ClawClose(action.target, timeout_ms);

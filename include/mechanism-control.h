@@ -12,6 +12,7 @@ struct request {
   int preset = 0;
   double target = 0;  // 抬升为电机度，夹爪为通电毫秒。
   double volts = 0;   // 仅直接夹爪动作使用，正数表示电压大小。
+  double hold_volts = 0;  // 闭爪到时后继续施加的夹持电压。
 };
 struct output {
   int motor_mV = 0;
@@ -201,7 +202,9 @@ class scheduler {
       case operation::claw_open:
       case operation::claw_close:
         return value == channel::claw && std::isfinite(action.target) && action.target >= 0 &&
-               std::isfinite(action.volts) && action.volts > 0 && action.volts <= 12;
+               std::isfinite(action.volts) && action.volts > 0 && action.volts <= 12 &&
+               std::isfinite(action.hold_volts) && action.hold_volts >= 0 &&
+               action.hold_volts <= (action.kind == operation::claw_close ? action.volts : 0.0);
     }
     return false;
   }

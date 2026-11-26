@@ -57,7 +57,7 @@ run performance tests/performance-test.cpp
 run high-speed-concurrency -pthread -DBARTMOSS_HIGH_SPEED=1 -I tests/sampling-mocks src/runtime-info.cpp tests/runtime-info-test.cpp
 
 # 旧最大参数个数必须报缺少timeout，禁止默默给出默认超时。
-for kind in {0..14}; do
+for kind in {0..16}; do
   if "$compiler" -std=c++11 -fsyntax-only -I include -DMISSING_ROUTE_TIMEOUT="$kind" tests/route-timeout-test.cpp > build/host-tests/missing-timeout.log 2>&1; then
     printf 'Missing timeout unexpectedly compiled: %s\n' "$kind"
     exit 1
@@ -67,4 +67,4 @@ for kind in {0..14}; do
     exit 1
   fi
 done
-printf 'All fifteen route factories reject missing timeout at compile time.\n'
+printf 'All seventeen route factories reject missing timeout at compile time.\n'

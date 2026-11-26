@@ -229,18 +229,18 @@ manual::input ReadInput() {
   return input;
 }
 
-void Apply(const manual::output& output, bool write_drive, bool brake_drive) {
+void Apply(const manual::output& output, bool write_drive, bool brake_drive, bool coast_drive) {
   if (write_drive) {
     for (int i = 0; i < 4; ++i) {
       // 测试停车直接刹车，避免先按普通手控停止方式再发一次刹车。
-      if (brake_drive && output.left_mV == 0) {
+      if ((brake_drive || coast_drive) && output.left_mV == 0) {
         if (*LeftDrive[i])
-          (*LeftDrive[i])->stop(vex::brake);
+          (*LeftDrive[i])->stop(brake_drive ? vex::brake : vex::coast);
       } else
         SetVoltage(*LeftDrive[i], output.left_mV);
-      if (brake_drive && output.right_mV == 0) {
+      if ((brake_drive || coast_drive) && output.right_mV == 0) {
         if (*RightDrive[i])
-          (*RightDrive[i])->stop(vex::brake);
+          (*RightDrive[i])->stop(brake_drive ? vex::brake : vex::coast);
       } else
         SetVoltage(*RightDrive[i], output.right_mV);
     }

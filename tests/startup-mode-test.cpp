@@ -34,6 +34,60 @@ struct fixture {
   }
 };
 int main() {
+  fixture teaching;
+  teaching.Step();
+  teaching.input.test_next = true;
+  teaching.Step();
+  assert(teaching.Selection.Mode() == runtime::local_mode::teach && !teaching.access.manual);
+  teaching.Release();
+  assert(teaching.access.manual && !teaching.access.tests && !teaching.access.telemetry);
+  teaching.field = true;
+  teaching.Step();
+  assert(teaching.Selection.Mode() == runtime::local_mode::select && !teaching.access.manual);
+  runtime::teach_recorder recorder;
+  manual::input keys;
+  drive::pose measured;
+  measured.valid = true;
+  measured.x_mm = -120; measured.y_mm = 80; measured.heading_deg = 93;
+  keys.test_start = true;
+  assert(recorder.Update(true, keys, measured, 0).count == 1);
+  assert(recorder.Update(true, keys, measured, 20).count == 1);
+  keys.test_start = false;
+  recorder.Update(false, keys, measured, 200);
+  keys.test_start = true;
+  assert(recorder.Update(true, keys, measured, 300).count == 1);  // 旧位姿拒绝记点。
+  keys.test_start = false;
+  keys.test_positive = true;
+  const auto first = recorder.Update(true, keys, measured, 320).packet;
+  assert(first.total == 1 && first.index == 1 && first.point.x_mm == -120 && first.point.heading_deg == 93);
+  keys.test_positive = false;
+  recorder.Update(true, keys, measured, 330);
+  keys.test_start = true;
+  measured.time_ms = 340;
+  measured.x_mm = 310;
+  assert(recorder.Update(true, keys, measured, 340).count == 2);
+  keys.test_start = false;
+  keys.test_positive = true;
+  const auto replay = recorder.Update(true, keys, measured, 350).packet;
+  assert(replay.index == 1 && replay.total == 2 && replay.batch != first.batch);
+  assert(recorder.Update(true, keys, measured, 840).packet.index == 1);
+  const auto last = recorder.Update(true, keys, measured, 850).packet;
+  assert(last.index == 2 && last.point.x_mm == 310);
+  assert(recorder.Update(false, keys, measured, 860).packet.index == 0);
+  keys = manual::input();
+  measured.needs_reset = true;
+  keys.test_start = true;
+  measured.time_ms = 900;
+  assert(recorder.Update(true, keys, measured, 900).count == 2);
+  measured.needs_reset = false;
+  for (unsigned i = 2; i <= runtime::teach_recorder::capacity; ++i) {
+    measured.time_ms += 20;
+    keys.test_start = false;
+    recorder.Update(true, keys, measured, measured.time_ms);
+    keys.test_start = true;
+    const auto& stored = recorder.Update(true, keys, measured, measured.time_ms + 10);
+    assert(stored.count == (i < runtime::teach_recorder::capacity ? i + 1 : i));
+  }
   // 模拟掉线后的定位锁存：反馈恢复也不能显示自动就绪；X仍可选择。
   drive::straight_feedback frame;
   frame.motors_online = frame.inertial_ready = frame.position.valid = frame.velocity.valid = frame.stopped =

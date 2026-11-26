@@ -1,6 +1,9 @@
 #include "autonomous.h"
 
 void autonomous_program::Update(bool permitted, const drive::straight_feedback& feedback, double now) {
+  // 停车已经撤掉所有输出。持续使能时保留首次终态，直到下一次重新使能。
+  if (permitted && previously_permitted && info.finished)
+    return;
   if (permitted && (!std::isfinite(now) || now < 0 || (previously_permitted && now < route_time))) {
     previously_permitted = true;
     FinishRoutine("CLOCK ERR");
@@ -24,6 +27,7 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
     return;
   }
   if (!previously_permitted) {
+    route_pace = route::pace::normal;
     Mechanisms.Reset(now);
     trigger_pending = false;
     Chassis.Reset();
@@ -36,6 +40,7 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
     info.finished = false;
     info.step = 0;
     ++info.run;
+    info.elapsed_ms = route_started_at = -1;
     point_stage = point_phase::idle;
     route_step_started = false;
     rolling_span = 1;
@@ -57,6 +62,7 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
       return;
     }
     waiting_ready = false;
+    route_started_at = now;
   }
   if (point_stage != point_phase::idle && !PointPoseReady()) {
     FinishRoutine("POSE ERROR");
@@ -99,7 +105,8 @@ void autonomous_program::Update(bool permitted, const drive::straight_feedback& 
 }
 
 // 每周期只推进当前动作；Wait 使用主循环时钟，不调用阻塞等待或创建额外任务。
-void autonomous_program::RunRoute(std::initializer_list<route::command> commands) {
+void autonomous_program::RunRoute(std::initializer_list<route::command> commands, route::pace pace) {
+  route_pace = pace;
   if (commands.size() == 0) {
     FinishRoutine("EMPTY", route_result::done);
     return;
@@ -263,7 +270,9 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
         return;
       }
       const double distance = std::hypot(command.x_mm - position.x_mm, command.y_mm - position.y_mm);
-      if (distance <= point_settings.position_tolerance_mm) {
+      const double exit_tolerance = point_stage == point_phase::driving && command.point_exit_tolerance_mm > 0
+                                        ? command.point_exit_tolerance_mm : point_settings.position_tolerance_mm;
+      if (distance <= exit_tolerance) {
         point_stage = point_phase::idle;
       } else if (point_stage == point_phase::facing) {
         // 原地转向也可能让中心移动；启动直行前按最新位置复核目标方位。
@@ -285,7 +294,7 @@ void autonomous_program::RunRoute(std::initializer_list<route::command> commands
         Chassis.Configure(settings);
         Chassis.Observe(frame, true, route_time);
         info.motion = autonomous_motion::straight;
-        if (!Chassis.StartDriveStraight(distance, command.maximum_rpm)) {
+        if (!Chassis.StartDriveStraight(command.reverse_point ? -distance : distance, command.maximum_rpm)) {
           FinishRoutine(Chassis.Info().status, Chassis.Info().state == drive::straight_state::cancelled
                                                    ? route_result::cancelled
                                                    : route_result::error);
@@ -438,6 +447,7 @@ bool autonomous_program::StartPoint(const route::command& command) {
     return false;
   }
   if (!std::isfinite(command.x_mm) || !std::isfinite(command.y_mm) || !std::isfinite(command.maximum_rpm) ||
+      !std::isfinite(command.point_exit_tolerance_mm) || command.point_exit_tolerance_mm < 0 ||
       command.maximum_rpm <= 0 || command.maximum_rpm > 600 || !std::isfinite(command.turn_rpm) ||
       command.turn_rpm <= 0 || command.turn_rpm > 600 ||
       !std::isfinite(point_settings.position_tolerance_mm) || point_settings.position_tolerance_mm <= 0 ||
@@ -470,7 +480,8 @@ bool autonomous_program::StartPoint(const route::command& command) {
 // 位姿朝向与IMU零点可能不同，只返回相对转角，保持原坐标转换约定。
 double autonomous_program::PointBearingError(const route::command& command) const {
   double delta = std::fmod(
-      std::atan2(command.y_mm - position.y_mm, command.x_mm - position.x_mm) * 180 / 3.14159265358979323846 -
+      std::atan2(command.y_mm - position.y_mm, command.x_mm - position.x_mm) * 180 / 3.14159265358979323846 +
+          (command.reverse_point ? 180.0 : 0.0) -
           std::fmod(position.heading_deg, 360.0),
       360.0);
   if (delta <= -180)

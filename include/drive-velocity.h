@@ -227,15 +227,14 @@ class velocity_control {
   double Slope(bool left, double target) const {
     return Model(left, target).kV;
   }
-  bool Feedforward(double left_target_rpm, double right_target_rpm, int& left, int& right) const {
-    const feedforward_output l =
-        motor_feedforward(Model(true, left_target_rpm)).Calculate(left_target_rpm, 0);
-    const feedforward_output r =
-        motor_feedforward(Model(false, right_target_rpm)).Calculate(right_target_rpm, 0);
-    if (!l.valid || !r.valid || l.saturated || r.saturated)
+  bool Feedforward(double left_target_rpm, double right_target_rpm, int& left, int& right,
+                   double left_accel = 0, double right_accel = 0) const {
+    int l = 0, r = 0;
+    if (!WheelVoltage(Model(true, left_target_rpm), left_target_rpm, left_accel, l) ||
+        !WheelVoltage(Model(false, right_target_rpm), right_target_rpm, right_accel, r))
       return false;
-    left = static_cast<int>(std::lround(l.millivolts));
-    right = static_cast<int>(std::lround(r.millivolts));
+    left = l;
+    right = r;
     return true;
   }
   // 基础电压可以已包含航向修正；对应的目标转速必须同样包含差速修正。
@@ -270,6 +269,19 @@ class velocity_control {
   }
 
  private:
+  // 匀速本身不可达仍报错；加速项临时用尽电压时按电机上限削顶。
+  static bool WheelVoltage(const feedforward_config& cfg, double rpm, double accel, int& voltage) {
+    const motor_feedforward model(cfg);
+    const auto result = model.Calculate(rpm, accel);
+    if (!result.valid)
+      return false;
+    const bool steady_saturated =
+        (accel == 0 || cfg.kA == 0) ? result.saturated : model.Calculate(rpm, 0).saturated;
+    if (steady_saturated)
+      return false;
+    voltage = static_cast<int>(std::lround(result.millivolts));
+    return true;
+  }
   const feedforward_config& Model(bool left, double target) const {
     return left ? (target < 0 ? left_reverse : left_forward) : (target < 0 ? right_reverse : right_forward);
   }

@@ -33,9 +33,10 @@ drive::pose Pose(double now = 0) {
   p.time_ms = now;
   return p;
 }
-double CheckPoint(double goal_x, double goal_y, double shift_mm = 0, unsigned realignments = 2,
-                  bool expect_done = true, double maximum_rpm = 100) {
-  requested = route::MoveToPoint(goal_x, goal_y, maximum_rpm, 100, 100000);
+double CheckPointCommand(const route::command& command, double shift_mm, unsigned realignments,
+                         bool expect_done, double straight_offset_mm = 0) {
+  requested = command;
+  const double goal_x = command.x_mm, goal_y = command.y_mm;
   const auto s = Straight();
   auto t = config::AutoTurnControl(drive::turn_config());
   t.left_forward = t.left_reverse = t.right_forward = t.right_reverse = s.left_forward;
@@ -49,8 +50,10 @@ double CheckPoint(double goal_x, double goal_y, double shift_mm = 0, unsigned re
   auto pose = Pose();
   p.ObservePose(pose);
   p.Update(true, f, 0);
-  assert(std::fabs(p.Info().turn.target_deg -
-                   (350 + std::atan2(goal_y, goal_x) * 180 / 3.14159265358979323846)) < 1e-6);
+  const double direction = command.reverse_point ? -1 : 1;
+  const double expected_heading = 350 + std::atan2(direction * goal_y, direction * goal_x) *
+                                            180 / 3.14159265358979323846;
+  assert(std::fabs(std::remainder(p.Info().turn.target_deg - expected_heading, 360.0)) < 1e-6);
   double l = 0, r = 0, x = 0, y = 0;
   const double mm_deg = 3.14159265358979323846 * 69.85 / 360 / 1.2;
   for (int tick = 1; tick < 1200 && p.Info().active; ++tick) {
@@ -76,6 +79,8 @@ double CheckPoint(double goal_x, double goal_y, double shift_mm = 0, unsigned re
       x += shift_mm;
       shifted = true;
     }
+    if (!driving_started && p.Info().motion == autonomous_motion::straight)
+      y += straight_offset_mm;
     if (p.Info().motion == autonomous_motion::straight)
       driving_started = true;
     if (driving_started)
@@ -91,13 +96,25 @@ double CheckPoint(double goal_x, double goal_y, double shift_mm = 0, unsigned re
   if (expect_done) {
     if (p.Info().result != route_result::done)
       std::printf("Point failed %s at %.2f %.2f shift%.1f cap%.0f\n", p.Info().status, x, y, shift_mm,
-                  maximum_rpm);
-    assert(p.Info().result == route_result::done && error <= 5);
+                  command.maximum_rpm);
+    const double exit_tolerance = command.point_exit_tolerance_mm > 0
+                                      ? command.point_exit_tolerance_mm : point_settings.position_tolerance_mm;
+    assert(p.Info().result == route_result::done && p.Info().step == 2 && error <= exit_tolerance);
   } else {
     assert(p.Info().finished);
+    if (straight_offset_mm != 0)
+      assert(p.Info().result == route_result::error && p.Info().step == 0 &&
+             !std::strcmp(p.Info().status, "POINT ERROR"));
   }
   assert(p.Info().left_mV == 0 && p.Info().right_mV == 0);
   return error;
+}
+
+double CheckPoint(double goal_x, double goal_y, double shift_mm = 0, unsigned realignments = 2,
+                  bool expect_done = true, double maximum_rpm = 100, bool reverse = false) {
+  const auto command = reverse ? route::ReverseToPoint(goal_x, goal_y, maximum_rpm, 100, 100000)
+                               : route::MoveToPoint(goal_x, goal_y, maximum_rpm, 100, 100000);
+  return CheckPointCommand(command, shift_mm, realignments, expect_done);
 }
 
 drive::feedforward_config PointTurnModel(double ks, double kv) {
@@ -356,6 +373,13 @@ int main() {
   CheckPoint(0, 1500);
   CheckPoint(-1500, 0);
   CheckPoint(1500, 1500);
+  CheckPoint(650, -600, 0, 2, true, 540, true);
+  // 同一段横向偏差默认应拒绝，只有显式放宽的绕行点允许继续。
+  const auto strict_point = route::MoveToPoint(560, 0, 300, 250, 6000);
+  const auto waypoint = route::MoveToWaypoint(560, 0, 300, 250, 10, 6000);
+  assert(CheckPointCommand(strict_point, 0, 2, false, 6.3) > 5);
+  assert(CheckPointCommand(waypoint, 0, 2, true, 6.3) <= 10);
+  assert(CheckPointCommand(waypoint, 0, 2, false, 11) > 10);
   for (int fault = 0; fault < 4; ++fault) {
     autonomous_program bad;
     bad.Configure(s, t);

@@ -27,7 +27,8 @@ namespace hardware {
 bool Initialize();
 manual::input ReadInput();
 mechanisms::feedback ReadMechanismFeedback();
-void Apply(const manual::output& output, bool write_drive = true, bool brake_drive = false);
+void Apply(const manual::output& output, bool write_drive = true, bool brake_drive = false,
+           bool coast_drive = false);
 void GetDriveMotorCount(int& left_count, int& right_count);
 drive::feedback ReadDriveFeedback();
 bool ReadDrivePosition(double& left_deg, double& right_deg);

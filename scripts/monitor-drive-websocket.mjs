@@ -6,7 +6,7 @@ export const HEADER = 'sequence,time_ms,dt_ms,left_mask,right_mask,acceleration_
 export const TUNING_HEADER = 'sequence,time_ms,run,stage,direction,state,elapsed_ms,distance_mm,remaining_mm,peak_rpm,peak_heading_deg,speed_rms_rpm,high_voltage_ms,at_speed_ms,qualified';
 export const ROUTE_HEADER = 'sequence,time_ms,run,step,motion,active,finished,waiting,result';
 export const PUSH_HEADER = 'sequence,time_ms,elapsed_ms,duration_ms,left_command_mV,right_command_mV,state,settling,left_rpm,right_rpm';
-const BASE = 'ws://127.0.0.1:7071/vexrobotics.vexcode';
+export const BASE = 'ws://127.0.0.1:7071/vexrobotics.vexcode';
 export const MOTOR_HEADER = 'sequence,time_ms,LM_deg,LM_current_A,LF_deg,LF_current_A,diagnostic_mask';
 export const HEADING_HEADER = 'sequence,heading_time_ms,heading_deg,target_deg,error_deg,correction_mV,locked,ready,active';
 export const VELOCITY_HEADER = 'sequence,velocity_time_ms,left_target_rpm,right_target_rpm,left_error_rpm,right_error_rpm,left_correction_mV,right_correction_mV,active';
@@ -35,7 +35,7 @@ function validFields(kind, f) {
     case 'DRA': return integer(2) && integer(3) && integer(4, 0, 5) && flags(5, 6, 7) &&
       integer(8, 0, 4) && !(f[5] === '1' && f[6] === '1') && (f[7] === '0' || f[5] === '1');
     case 'DPS': return Number(f[2]) >= 0 && Number(f[3]) >= 0 && Number(f[3]) <= 5000 &&
-      integer(4, 0, 12000) && integer(5, 0, 12000) && integer(6, 0, 4) && flags(7) &&
+      voltage(4) && voltage(5) && Number(f[4]) === Number(f[5]) && integer(6, 0, 4) && flags(7) &&
       ((f[6] === '1' && f[7] === '0') || (f[4] === '0' && f[5] === '0'));
     case 'DHD': return flags(6, 7, 8);
     case 'DVL': return flags(8);
@@ -158,7 +158,7 @@ export class DriveLines {
   }
 }
 
-function selectedDevice() {
+export function selectedDevice() {
   return new Promise((resolve, reject) => {
     const query = new WebSocket(`${BASE}/query`);
     query.binaryType = 'arraybuffer';

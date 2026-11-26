@@ -133,7 +133,8 @@ class straight_controller {
       return;
     }
     const double target = Motion.Info().target_rpm;
-    if (!Velocity.Feedforward(target, target, info.left_mV, info.right_mV)) {
+    const double acceleration = target == 0 ? 0 : Motion.Info().target_acceleration_rpm_s;
+    if (!Velocity.Feedforward(target, target, info.left_mV, info.right_mV, acceleration, acceleration)) {
       Fail("FF ERROR");
       return;
     }

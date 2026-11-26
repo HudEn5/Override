@@ -28,6 +28,31 @@ struct fixture {
   }
 };
 int main() {
+  fixture dock;
+  assert(dock.Push.StartPushFor(240, 3, true));
+  for (int i = 0; i < 11; ++i) {
+    dock.Tick();
+    assert(dock.Push.Info().left_mV == 3000);
+  }
+  dock.Tick();
+  assert(dock.Push.Info().state == drive::push_state::done && dock.Push.Info().left_mV == 0);
+
+  fixture late_contact;
+  assert(late_contact.Push.StartPushFor(200, 3, true));
+  late_contact.frame.stopped = false;
+  for (int i = 0; i < 9; ++i)
+    late_contact.Tick();
+  late_contact.frame.stopped = true;
+  late_contact.Tick();  // 到时刚停，撤压后继续等有效的静止采样。
+  for (int i = 0; i < 5; ++i)
+    late_contact.Tick(true, false);
+  assert(late_contact.Push.Info().settling && late_contact.Push.Info().left_mV == 0);
+  late_contact.Tick();  // 新样本和上一帧相隔 120 ms，重新确认连续静止。
+  assert(late_contact.Push.Info().settling);
+  for (int i = 0; i < 4; ++i)
+    late_contact.Tick();
+  late_contact.Tick();
+  assert(late_contact.Push.Info().state == drive::push_state::done);
   fixture contact;
   assert(contact.Push.StartPushFor(1000, 4));
   assert(!contact.Push.StartPushFor(200, 3));  // 同一动作不能被覆盖。
@@ -54,7 +79,7 @@ int main() {
     assert(!bad.Push.StartPushFor(duration, 4));
     assert(bad.Push.Info().state == drive::push_state::error && bad.Push.Info().left_mV == 0);
   }
-  for (double voltage : {-1.0, 0.0, .0001, 12.1, std::numeric_limits<double>::quiet_NaN()}) {
+  for (double voltage : {-12.1, -.0001, 0.0, .0001, 12.1, std::numeric_limits<double>::quiet_NaN()}) {
     fixture bad;
     assert(!bad.Push.StartPushFor(1000, voltage));
     assert(bad.Push.Info().right_mV == 0);

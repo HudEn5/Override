@@ -14,6 +14,12 @@ constexpr int CALIBRATION_MODE_HOLD_MS = 1000;
 }  // 标定参数命名空间
 
 namespace config {
+// X 测试菜单临时选择手臂定电压采样，改为 false 恢复底盘测试。
+constexpr bool ARM_TUNING_TEST = true;
+constexpr int ARM_TUNING_MIN_UP_MV = 4000, ARM_TUNING_MAX_UP_MV = 8000;
+constexpr int ARM_TUNING_DOWN_MV = 2500;
+constexpr double ARM_TUNING_MAX_DEG = 65, ARM_TUNING_PULSE_MS = 800;
+
 // 日常测试只改这里。直行距离为正数，方向由左/右键选择；正角逆时针。
 constexpr double TEST_STRAIGHT_MM = 500;
 constexpr double TEST_STRAIGHT_RPM = 100;

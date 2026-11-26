@@ -157,6 +157,7 @@ struct trapezoid_info {
   double distance_mm = 0;
   double remaining_mm = 0;
   double target_rpm = 0;
+  double target_acceleration_rpm_s = 0;  // 限幅后的中心目标加速度，供速度前馈使用。
   int phase = 0;  // 0 空闲，1 加速，2 匀速，3 减速，4 停稳，5 完成，6 取消，7 故障。
   const char* status = "READY";
 };
@@ -296,10 +297,13 @@ class trapezoid_motion {
       requested = Clamp(requested, cap);
     }
     // 到达位置窗口后直接制动，等实际速度也稳定；故障和松手同样立即制动。
+    const double previous_rpm = info.target_rpm;
     info.target_rpm = near ? 0
                            : motion::LimitVelocity(info.target_rpm, requested, config.acceleration_rpm_s,
                                                    config.deceleration_rpm_s, dt);
-    if (!std::isfinite(info.target_rpm))
+    // 到位撤压不能当成一个周期内的减速度指令。
+    info.target_acceleration_rpm_s = !near && dt > 0 ? (info.target_rpm - previous_rpm) / dt : 0;
+    if (!std::isfinite(info.target_rpm) || !std::isfinite(info.target_acceleration_rpm_s))
       return Fail("TP CONFIG");
     return true;
   }
@@ -321,6 +325,7 @@ class trapezoid_motion {
   void Finish(const char* status, int phase) {
     info.running = false;
     info.target_rpm = 0;
+    info.target_acceleration_rpm_s = 0;
     info.status = status;
     info.phase = phase;
   }

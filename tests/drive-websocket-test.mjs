@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { DriveLines, HEADER, MOTOR_HEADER, HEADING_HEADER, VELOCITY_HEADER, PROFILE_HEADER, QUALITY_HEADER, TURN_HEADER, TURN_PROFILE_HEADER, CORNER_HEADER, ROLLING_HEADER, TUNING_HEADER, ROUTE_HEADER, PUSH_HEADER } from '../scripts/monitor-drive-websocket.mjs';
+import { TeachPoints } from '../scripts/capture-teach.mjs';
+
+const teach = new TeachPoints();
+assert.equal(teach.push('#web#DWP,1,1,3,-2.0,4.0,'), null);
+assert.equal(teach.push('90.0\r\nDWP,1,3,3,0.0,0.0,0.0\n'), null);
+assert.equal(teach.push('DWP,2,1,2,1.0,2.0,3.0\nDWP,2,2,2,0,xx,0\n'), null);
+assert.deepEqual(teach.push('DWP,2,2,2,-3.5,4.0,85.0\n'), [[1, 1, 2, 3], [2, -3.5, 4, 85]]);
 
 // 协议契约测试：模拟串口跨消息分片，不能将半行误写成完整样本。
 const received = [];
@@ -185,6 +192,10 @@ for (const [index,value] of [[3,'5001'],[4,'12001'],[5,'-1'],[6,'5'],[7,'1']]) {
   const bad=[...push];bad[index]=value;pushParser.push(`DPS,${bad.join(',')}\n`);
 }
 assert.equal(pushParser.malformed,5); assert.equal(pushParser.pushes,2);
+const reversePush = [...push];
+reversePush[4] = reversePush[5] = '-4000';
+pushParser.push(`DPS,${reversePush.join(',')}\n`);
+assert.deepEqual(pushRows[2], reversePush);
 console.log('Push protocol checks passed: stalled force/settle fragments, route motion=4 and invalid duration/voltage/state rejection.');
 
 const poseRows = [];

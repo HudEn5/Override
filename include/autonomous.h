@@ -25,7 +25,7 @@ struct push_info {
   int left_mV = 0, right_mV = 0;
 };
 
-// 机械定位专用定时前推：固定同向电压，不做位置/速度/航向闭环，允许接触后停转。
+// 定时推靠：两侧同电压，正值车头对接，负值车尾贴墙，允许接触后停转。
 // 只计算输出；时间到先撤电压，确认停稳后才把底盘交给下一个动作。
 class push_controller {
  public:
@@ -44,18 +44,21 @@ class push_controller {
     have_frame = true;
     if (value.velocity.valid && std::isfinite(value.velocity.time_ms) &&
         (!have_sample || value.velocity.sequence != sequence)) {
+      if (credit_powered_stop && have_sample && now_ms - received_at > config.stale_ms)
+        settled_at = -1;
       received_at = now_ms;
       sequence = value.velocity.sequence;
       have_sample = true;
     }
   }
-  bool StartPushFor(double duration_ms, double volts) {
+  bool StartPushFor(double duration_ms, double volts, bool count_stop_during_push = false) {
     if (info.state == push_state::running)
       return false;
     if (!Positive(config.maximum_duration_ms) || !Positive(config.stale_ms) ||
         !Positive(config.max_update_ms) || !Positive(config.wheel_tolerance_rpm) ||
         !Nonnegative(config.settle_ms) || !Positive(config.settle_timeout_ms) || !Nonnegative(duration_ms) ||
-        duration_ms > config.maximum_duration_ms || !Positive(volts) || volts < .001 || volts > 12)
+        duration_ms > config.maximum_duration_ms || !std::isfinite(volts) || std::fabs(volts) < .001 ||
+        std::fabs(volts) > 12)
       return Fail("PUSH CONFIG");
     if (!Check())
       return false;
@@ -67,6 +70,7 @@ class push_controller {
     info.time_ms = now;
     started_at = previous_time = now;
     settled_at = -1;
+    credit_powered_stop = count_stop_during_push;
     voltage = static_cast<int>(std::lround(volts * 1000));
     info.state = duration_ms == 0 ? push_state::done : push_state::running;
     info.status = duration_ms == 0 ? "DONE" : "PUSH";
@@ -87,7 +91,16 @@ class push_controller {
     info.elapsed_ms = now - started_at;
     info.left_rpm = frame.velocity.left_rpm;
     info.right_rpm = frame.velocity.right_rpm;
-    if (info.elapsed_ms < info.duration_ms) {
+    const bool powered = info.elapsed_ms < info.duration_ms;
+    const bool stopped = frame.stopped && std::fabs(info.left_rpm) <= config.wheel_tolerance_rpm &&
+                         std::fabs(info.right_rpm) <= config.wheel_tolerance_rpm;
+    // 试车档允许顶靠期间累计停稳；重复的测速快照不增加已确认的静止时长。
+    const double stop_clock = credit_powered_stop ? std::max(started_at, received_at) : now;
+    if (!stopped)
+      settled_at = -1;
+    else if ((!powered || credit_powered_stop) && settled_at < 0)
+      settled_at = stop_clock;
+    if (powered) {
       info.left_mV = info.right_mV = voltage;
       info.status = "PUSH";
       return;
@@ -95,13 +108,7 @@ class push_controller {
     info.left_mV = info.right_mV = 0;
     info.settling = true;
     info.status = "PUSH SETTLE";
-    const bool stopped = frame.stopped && std::fabs(info.left_rpm) <= config.wheel_tolerance_rpm &&
-                         std::fabs(info.right_rpm) <= config.wheel_tolerance_rpm;
-    if (!stopped)
-      settled_at = -1;
-    else if (settled_at < 0)
-      settled_at = now;
-    if (stopped && now - settled_at >= config.settle_ms) {
+    if (stopped && stop_clock - settled_at >= config.settle_ms) {
       info.state = push_state::done;
       info.status = "DONE";
       info.settling = false;
@@ -156,6 +163,7 @@ class push_controller {
     return false;
   }
   push_config config;
+  bool credit_powered_stop = false;
   push_info info;
   straight_feedback frame;
   bool allowed = false, have_frame = false, have_sample = false;
@@ -184,12 +192,15 @@ enum class action {
   straight_trigger
 };
 enum class turn_mode { stop, rolling };
+enum class pace { normal, sprint };
 struct command {
   explicit command(action value, double timeout) : kind(value), timeout_ms(timeout) {}
   action kind;
   double timeout_ms;  // 整个命令的执行上限，毫秒；路线必须显式填写。
   double distance_mm = 0, angle_deg = 0, before_mm = 0, after_mm = 0;
   double x_mm = 0, y_mm = 0, duration_ms = 0, volts = DEFAULT_PUSH_VOLTS;
+  double point_exit_tolerance_mm = 0;  // 直行完成后的点位验收半径，0 沿用默认值。
+  bool reverse_point = false;  // 倒车到点时，先将车尾对准目标。
   double maximum_rpm = DEFAULT_DRIVE_RPM, turn_rpm = DEFAULT_TURN_RPM;
   double entry_speed_mm_s = 200;
   turn_mode transition = turn_mode::stop;
@@ -231,6 +242,11 @@ inline command ClawOpen(double duration_ms, double volts, double timeout_ms) {
 inline command ClawClose(double duration_ms, double volts, double timeout_ms) {
   command result = ClawOpen(duration_ms, volts, timeout_ms);
   result.mechanism_request.kind = mechanism::operation::claw_close;
+  return result;
+}
+inline command ClawClose(double duration_ms, double volts, double hold_volts, double timeout_ms) {
+  command result = ClawClose(duration_ms, volts, timeout_ms);
+  result.mechanism_request.hold_volts = hold_volts;
   return result;
 }
 // trigger_mm为本段从起点起的非负距离，倒车也按行程大小；两个预算均必填。
@@ -280,6 +296,17 @@ inline command MoveToPoint(double x_mm, double y_mm, double maximum_rpm, double 
   result.turn_rpm = turn_rpm;
   return result;
 }
+inline command MoveToWaypoint(double x_mm, double y_mm, double maximum_rpm, double turn_rpm,
+                              double exit_tolerance_mm, double timeout_ms) {
+  command result = MoveToPoint(x_mm, y_mm, maximum_rpm, turn_rpm, timeout_ms);
+  result.point_exit_tolerance_mm = exit_tolerance_mm;
+  return result;
+}
+inline command ReverseToPoint(double x_mm, double y_mm, double maximum_rpm, double turn_rpm, double timeout_ms) {
+  command result = MoveToPoint(x_mm, y_mm, maximum_rpm, turn_rpm, timeout_ms);
+  result.reverse_point = true;
+  return result;
+}
 inline command Swing(double angle_deg, drive::pivot_side fixed, double maximum_rpm, double timeout_ms) {
   command result = Turn(angle_deg, maximum_rpm, timeout_ms);
   result.kind = action::swing;
@@ -325,6 +352,7 @@ struct autonomous_info {
   unsigned int step = 0;
   const char* status = "IDLE";
   double time_ms = 0;
+  double elapsed_ms = -1;  // 路线结束时锁存耗时；尚未执行动作时为 -1。
   bool waiting = false;
   route_result result = route_result::idle;  // 0 未开始，1 运行，2 正常完成，3 取消，4 故障。
   drive::straight_info drive;
@@ -383,7 +411,8 @@ class autonomous_program {
     if (!info.active || Busy())
       return false;
     info.motion = autonomous_motion::straight;
-    Chassis.Configure(straight_settings);
+    Chassis.Configure(route_pace == route::pace::sprint ? config::SprintStraightControl(straight_settings)
+                                                       : straight_settings);
     Chassis.Observe(frame, true, route_time);
     return Chassis.StartDriveStraight(distance_mm, maximum_rpm);
   }
@@ -391,7 +420,7 @@ class autonomous_program {
     if (!info.active || Busy())
       return false;
     info.motion = autonomous_motion::turn;
-    Turning.Configure(turn_settings);
+    ConfigureRouteTurn();
     Turning.Observe(frame, true, route_time);
     return Turning.StartTurnRelative(angle_deg, maximum_rpm);
   }
@@ -399,7 +428,7 @@ class autonomous_program {
     if (!info.active || Busy())
       return false;
     info.motion = autonomous_motion::turn;
-    Turning.Configure(turn_settings);
+    ConfigureRouteTurn();
     Turning.Observe(frame, true, route_time);
     return Turning.StartTurnToHeading(heading_deg, maximum_rpm);
   }
@@ -443,7 +472,7 @@ class autonomous_program {
     if (!info.active || Busy())
       return false;
     info.motion = autonomous_motion::push;
-    return Pushing.StartPushFor(milliseconds, volts);
+    return Pushing.StartPushFor(milliseconds, volts, route_pace == route::pace::sprint);
   }
   drive::push_state PushState() const {
     return Pushing.Info().state;
@@ -465,11 +494,18 @@ class autonomous_program {
 
  private:
   void RunRoutine();  // 只在 src/route.cpp 编排动作，同一份路线用于实车调试和比赛。
-  void RunRoute(std::initializer_list<route::command> commands);
+  void RunRoute(std::initializer_list<route::command> commands, route::pace pace = route::pace::normal);
+  void ConfigureRouteTurn() {
+    Turning.Configure(route_pace == route::pace::sprint ? config::SprintTurnControl(turn_settings)
+                                                       : turn_settings);
+  }
   void FinishRoutine() {
     FinishRoutine("DONE", route_result::done);
   }
   void FinishRoutine(const char* status, route_result result = route_result::error) {
+    info.elapsed_ms = info.active && route_started_at >= 0 && std::isfinite(route_time) && route_time >= route_started_at
+                          ? route_time - route_started_at
+                          : -1;
     CancelAll(result == route_result::done);
     point_stage = point_phase::idle;
     info.active = false;
@@ -502,6 +538,7 @@ class autonomous_program {
   unsigned point_realignments = 0;
   drive::point_config point_settings;
   drive::straight_config straight_settings;
+  route::pace route_pace = route::pace::normal;
   drive::turn_config turn_settings;
   drive::straight_feedback frame;
   drive::straight_controller Chassis;
@@ -517,5 +554,5 @@ class autonomous_program {
   bool waiting_ready = false;
   bool route_step_started = false;
   unsigned transfer_phase = 0, rolling_span = 1;
-  double route_time = 0, wait_started = 0, action_started_at = 0;
+  double route_time = 0, route_started_at = -1, wait_started = 0, action_started_at = 0;
 };

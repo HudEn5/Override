@@ -46,7 +46,70 @@ inline permissions Permissions(program_mode mode, bool configured, bool field_co
 }  // 运行环境命名空间
 
 namespace runtime {
-enum class local_mode { select, manual, automatic, test };
+enum class local_mode { select, manual, automatic, test, teach };
+
+struct teach_packet {
+  unsigned batch = 0, index = 0, total = 0;
+  drive::pose point;
+};
+struct teach_info {
+  unsigned count = 0;
+  const char* status = "A:MARK RIGHT:SEND";
+  teach_packet packet;
+};
+
+// 主循环独占点表。显示与回传只读取当前快照；每次导出固定到按键当时的点数。
+class teach_recorder {
+ public:
+  static constexpr unsigned capacity = 64;
+  const teach_info& Update(bool active, const manual::input& input, const drive::pose& pose, double now) {
+    const bool mark = active && input.test_start && !last_mark;
+    const bool send = active && input.test_positive && !last_send;
+    last_mark = input.test_start;
+    last_send = input.test_positive;
+    if (!active) {
+      info.packet = teach_packet();
+      info.status = "A:MARK RIGHT:SEND";
+      return info;
+    }
+    if (mark) {
+      if (pose.needs_reset)
+        info.status = "POSE RESET:RESTART";
+      else if (!pose.valid || !std::isfinite(now) || !std::isfinite(pose.time_ms) ||
+               pose.time_ms < 0 || now < pose.time_ms || now - pose.time_ms > 200 ||
+               !std::isfinite(pose.x_mm) || !std::isfinite(pose.y_mm) || !std::isfinite(pose.heading_deg))
+        info.status = "POSE WAIT";
+      else if (info.count == capacity)
+        info.status = "FULL RIGHT:SEND";
+      else {
+        points[info.count++] = pose;
+        info.status = "SAVED RIGHT:SEND";
+      }
+    }
+    if (send && info.count) {
+      info.packet.batch = ++batch;
+      info.packet.total = info.count;
+      info.packet.index = 0;
+      next_send = now;
+      info.status = "SENDING";
+    } else if (send)
+      info.status = "NO POINTS";
+    if (info.packet.index < info.packet.total && now >= next_send) {
+      info.packet.point = points[info.packet.index++];
+      next_send = now + 500;
+      if (info.packet.index == info.packet.total)
+        info.status = "SENT RIGHT:RESEND";
+    }
+    return info;
+  }
+
+ private:
+  drive::pose points[capacity];
+  teach_info info;
+  unsigned batch = 0;
+  double next_send = 0;
+  bool last_mark = false, last_send = false;
+};
 
 // 主循环独占此状态。A/B/X只在菜单选择模式，选择按键不会传递到机构和测试。
 class startup_mode {
@@ -68,7 +131,7 @@ class startup_mode {
   }
   void Update(const manual::input& input, bool available, bool field_connected, bool sticks, bool stopped,
               bool auto_ready, bool route_finished, double now) {
-    const bool keys = input.test_start || input.test_cancel || input.toggle;
+    const bool keys = input.test_start || input.test_cancel || input.toggle || input.test_next;
     if (!available || field_connected || !std::isfinite(now) || now < previous_time) {
       Reset();
       previous_time = std::isfinite(now) ? now : 0;
@@ -81,7 +144,7 @@ class startup_mode {
           release_required = false;
         return;
       }
-      const int count = static_cast<int>(input.test_start) + input.test_cancel + input.toggle;
+      const int count = static_cast<int>(input.test_start) + input.test_cancel + input.toggle + input.test_next;
       if (count != 1) {
         if (count > 1)
           release_required = true;
@@ -93,6 +156,7 @@ class startup_mode {
       }
       mode = input.test_start    ? local_mode::automatic
              : input.test_cancel ? local_mode::manual
+             : input.test_next   ? local_mode::teach
                                  : local_mode::test;
       armed = automatic_issued = false;
       hold_since = finished_since = -1;
@@ -177,7 +241,10 @@ inline permissions SessionPermissions(const startup_mode& selection, bool config
   result.telemetry = true;  // 可在菜单先打开LOG，记录自动起步；此权限不允许电机动作。
   if (!selection.Armed())
     return result;
-  result.manual = selection.Mode() == local_mode::manual || selection.Mode() == local_mode::test;
+  result.manual = selection.Mode() == local_mode::manual || selection.Mode() == local_mode::test ||
+                  selection.Mode() == local_mode::teach;
+  if (selection.Mode() == local_mode::teach)
+    result.telemetry = false;  // 示教只按右键导出点表。
   result.tests = selection.Mode() == local_mode::test;
   result.autonomous = selection.Automatic();
   return result;

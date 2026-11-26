@@ -12,7 +12,7 @@ void autonomous_program::RunRoutine() {
     RunRoute({PushFor(0, route::DEFAULT_PUSH_VOLTS, 100000), Wait(0, 100000),
               DriveStraight(0, route::DEFAULT_DRIVE_RPM, 100000)});
   else
-    RunRoute({PushFor(1000, route::DEFAULT_PUSH_VOLTS, 100000), Wait(100, 100000),
+    RunRoute({PushFor(1000, scenario == 4 ? -4.0 : route::DEFAULT_PUSH_VOLTS, 100000), Wait(100, 100000),
               DriveStraight(0, route::DEFAULT_DRIVE_RPM, 100000)});
   if (info.active && info.motion == autonomous_motion::push && PushState() == drive::push_state::running) {
     assert(!StartDriveStraight(50, 100) && !StartTurnRelative(90, 100));
@@ -20,7 +20,7 @@ void autonomous_program::RunRoutine() {
   }
 }
 int main() {
-  for (int which = 0; which < 4; ++which) {
+  for (int which = 0; which < 5; ++which) {
     scenario = which;
     autonomous_program p;
     drive::straight_config s;
@@ -34,14 +34,15 @@ int main() {
       f.velocity.time_ms = time;
       p.Update(!(which == 1 && time >= 400), f, time);
       if (p.Info().left_mV) {
-        assert(p.Info().left_mV == 4000 && p.Info().right_mV == 4000);
+        const int expected_mV = which == 4 ? -4000 : 4000;
+        assert(p.Info().left_mV == expected_mV && p.Info().right_mV == expected_mV);
         ++powered;
       }
       if (time >= 1000)
         assert(p.Info().left_mV == 0 && p.Info().right_mV == 0);
     }
     assert(p.Info().finished);
-    if (which == 0)
+    if (which == 0 || which == 4)
       assert(p.Info().result == route_result::done && p.Info().step == 3 && powered == 50);
     if (which == 1)
       assert(p.Info().result == route_result::cancelled && p.Info().step == 0 && powered == 20);

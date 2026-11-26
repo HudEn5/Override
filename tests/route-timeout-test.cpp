@@ -36,8 +36,12 @@ void MissingTimeout() {
   LiftTo(100);
 #elif MISSING_ROUTE_TIMEOUT == 13
   ClawOpen(300, 12.0);
-#else
+#elif MISSING_ROUTE_TIMEOUT == 14
   ClawClose(500, 12.0);
+#elif MISSING_ROUTE_TIMEOUT == 15
+  ReverseToPoint(100, 100, 100, 100);
+#else
+  MoveToWaypoint(100, 100, 100, 100, 10);
 #endif
 }
 #endif
@@ -106,6 +110,7 @@ int main() {
   Check(TurnToHeading(90, 100, 100), false);
   Check(DriveCorner(100, 90, 100, 100, 100), false);
   Check(MoveToPoint(100, 100, 100, 100, 100), false);
+  Check(MoveToWaypoint(100, 100, 100, 100, 10, 100), false);
   Check(Swing(90, drive::pivot_side::left, 100, 100), false);
   Check(DriveTurnDrive(100, 90, 100, turn_mode::stop, 150, 100, 100), false);
   Check(DriveTurnDrive(100, 90, 100, turn_mode::rolling, 150, 100, 100), false);
