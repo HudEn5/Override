@@ -62,9 +62,14 @@ for kind in {0..16}; do
     printf 'Missing timeout unexpectedly compiled: %s\n' "$kind"
     exit 1
   fi
-  if ! grep -q 'too few arguments' build/host-tests/missing-timeout.log; then
-    cat build/host-tests/missing-timeout.log
-    exit 1
+  if grep -q 'too few arguments' build/host-tests/missing-timeout.log; then
+    continue
   fi
+  # ClawClose 有重载，GCC 将缺参报为没有匹配的函数，再列出候选参数数量。
+  if [[ "$kind" == 14 ]] && grep -q 'candidate expects 3 arguments, 2 provided' build/host-tests/missing-timeout.log; then
+    continue
+  fi
+  cat build/host-tests/missing-timeout.log
+  exit 1
 done
 printf 'All seventeen route factories reject missing timeout at compile time.\n'
